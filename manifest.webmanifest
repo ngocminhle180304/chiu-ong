@@ -1,0 +1,17 @@
+{
+  "name": "Chìu ông hông bíc ăn gì",
+  "short_name": "Chìu ông",
+  "description": "Leeming giúp Cá chọn món ăn, tìm quán và lưu kỷ niệm mỗi bữa.",
+  "lang": "vi",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FFF3E6",
+  "theme_color": "#C63A17",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
