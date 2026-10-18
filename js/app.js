@@ -243,9 +243,31 @@
     });
   }
 
+  /** Nhãn và nhóm thuộc tính món luôn lấy theo Code.gs đã nạp (dishAttrGroups_), kể cả khi
+   *  Apps Script đang deploy còn là bản cũ chưa trả dishAttrGroups hoặc còn nhãn cũ. */
+  function normalizeData(d) {
+    if (!d || typeof dishAttrGroups_ !== 'function') return d;
+    var keys = (d.dishAttrs || []).map(function (a) { return a.key; });
+    (d.dishAttrGroups || []).forEach(function (g) { g.attrs.forEach(function (a) { if (keys.indexOf(a.key) < 0) keys.push(a.key); }); });
+    d.dishAttrGroups = dishAttrGroups_(keys);
+    d.dishAttrs = d.dishAttrGroups.reduce(function (out, g) { return out.concat(g.attrs); }, []);
+    return d;
+  }
+  /** Thống kê khẩu vị: chỉ nhóm Vị + Dạng món, nhãn tiếng Việt theo thuộc tính món. */
+  function normalizeStats(st) {
+    if (!st || !st.tasteProfile || !S.data) return st;
+    var label = {}; var taste = {};
+    attrGroups().forEach(function (g) {
+      g.attrs.forEach(function (a) { label[a.key] = a.label; if (g.key === 'vi' || g.key === 'dang') taste[a.key] = true; });
+    });
+    var hasGroups = Object.keys(taste).length > 0;
+    st.tasteProfile = st.tasteProfile.filter(function (t) { return !hasGroups || taste[t.key]; })
+      .map(function (t) { return Object.assign({}, t, { label: label[t.key] || t.label }); });
+    return st;
+  }
   function refreshData() {
     return api('bootstrap').then(function (d) {
-      S.data = d;
+      S.data = normalizeData(d);
       if (!DEMO) LS.set('leeming_cache', d);
       return d;
     });
@@ -944,7 +966,7 @@
     var st = S.stats; var month = st.month || today().slice(0, 7);
     st.loading = true;
     api('getStats', { month: month }).then(function (d) {
-      st.data = d; st.month = month; st.loading = false;
+      st.data = normalizeStats(d); st.month = month; st.loading = false;
       if (S.route === 'stats') render();
     }).catch(function (e) { st.loading = false; toast(e.message, true); });
   }
@@ -1229,7 +1251,7 @@
   function start() {
     if (!DEMO && !S.token) { S.route = 'token'; render(); return; }
     var cached = !DEMO && LS.get('leeming_cache', null);
-    if (cached && !S.data) { S.data = cached; route(); }
+    if (cached && !S.data) { S.data = normalizeData(cached); route(); }
     refreshData().then(function () {
       if (S.route === 'token') S.route = '';
       route();
