@@ -6,8 +6,9 @@
  *  Cách dùng nhanh:
  *   1. Dán toàn bộ file này vào Extensions > Apps Script của Google Sheet.
  *   2. Chạy hàm setupSheets() một lần (cấp quyền khi được hỏi).
- *   3. Deploy > New deployment > Web app (Execute as: Me, Access: Anyone).
- *   4. Lấy mã truy cập ở menu "Leeming" > "Xem mã truy cập".
+ *   3. Đang dùng bản cũ (V1)? Chạy thêm migrateSchemaV2() một lần để nâng cấp dữ liệu.
+ *   4. Deploy > New deployment > Web app (Execute as: Me, Access: Anyone).
+ *   5. Lấy mã truy cập ở menu "Leeming" > "Xem mã truy cập".
  * ============================================================
  */
 
@@ -15,21 +16,44 @@
 
 const TZ = 'Asia/Ho_Chi_Minh';
 
-/** Thuộc tính món ăn mặc định (mỗi thuộc tính là 1 cột checkbox trong sheet Dishes).
- *  Muốn thêm thuộc tính mới: chỉ cần thêm cột mới vào sheet Dishes, backend tự nhận. */
-const DISH_ATTRS = ['cay', 'ngot', 'chua', 'beo', 'man', 'nuoc', 'kho', 'nong', 'an_no', 'an_vat'];
-const ATTR_LABELS = {
-  cay: 'Cay', ngot: 'Ngọt', chua: 'Chua', beo: 'Béo', man: 'Mặn', nuoc: 'Có nước',
-  kho: 'Khô', nong: 'Nóng', an_no: 'No bụng', an_vat: 'Ăn vặt'
-};
+/** Thuộc tính món ăn (mỗi thuộc tính là 1 cột checkbox trong sheet Dishes), chia theo nhóm để hiển thị.
+ *  Muốn thêm thuộc tính mới: chỉ cần thêm cột mới vào sheet Dishes, backend tự nhận và xếp vào nhóm "Khác". */
+const DISH_ATTR_GROUPS = [
+  { key: 'vi', label: 'Vị', attrs: [['cay', 'Cay'], ['ngot', 'Ngọt'], ['chua', 'Chua'], ['beo', 'Béo'], ['man', 'Mặn']] },
+  { key: 'dang', label: 'Dạng món', attrs: [['nuoc', 'Có nước'], ['kho', 'Khô'], ['nong', 'Đồ nóng'], ['lanh', 'Đồ lạnh'],
+    ['an_no', 'Ăn là no'], ['an_vat', 'Vặt vãnh']] },
+  { key: 'nen', label: 'Nền ẩm thực', attrs: [['chay', 'Đồ chay'], ['do_viet', 'Đồ Việt'], ['do_trung', 'Đồ Trung'], ['do_au', 'Đồ Âu'],
+    ['do_nhat', 'Đồ Nhật'], ['do_thai', 'Đồ Thái'], ['do_han', 'Đồ Hàn']] },
+  { key: 'tp', label: 'Thành phần chính', attrs: [['tp_bo', 'Bò'], ['tp_ga', 'Gà'], ['tp_vit', 'Vịt'], ['tp_ngan', 'Ngan'],
+    ['tp_lon', 'Lợn'], ['tp_ca', 'Cá'], ['tp_haisan', 'Hải sản'], ['tp_trung', 'Trứng']] }
+];
+const DISH_ATTRS = [];
+const ATTR_LABELS = {};
+DISH_ATTR_GROUPS.forEach((g) => g.attrs.forEach((a) => { DISH_ATTRS.push(a[0]); ATTR_LABELS[a[0]] = a[1]; }));
+/** Thống kê "khẩu vị" chỉ tính vị và dạng món. */
+const TASTE_ATTRS = DISH_ATTR_GROUPS.filter((g) => g.key === 'vi' || g.key === 'dang')
+  .reduce((out, g) => out.concat(g.attrs.map((a) => a[0])), []);
+/** Thuộc tính thêm ở V2 — migrateSchemaV2() tự đoán giá trị cho món cũ. */
+const V2_DISH_ATTRS = ['lanh', 'chay', 'do_viet', 'do_trung', 'do_au', 'do_nhat', 'do_thai', 'do_han',
+  'tp_bo', 'tp_ga', 'tp_vit', 'tp_ngan', 'tp_lon', 'tp_ca', 'tp_haisan', 'tp_trung'];
 const DISH_BASE_COLS = ['id', 'name', 'category', 'image_url', 'note', 'created_at', 'updated_at', 'deleted'];
+
+/** Điểm chung của quán = trung bình có trọng số của 4 tiêu chí (thang 0–5). Thiếu tiêu chí nào thì chia lại trọng số. */
+const RATING_WEIGHTS = { quality: 0.5, service: 0.2, price_score: 0.2, space: 0.1 };
+const RATING_LABELS = { quality: 'Chất lượng', price_score: 'Giá', space: 'Không gian', service: 'Phục vụ' };
+
+/** Phân loại mặc định (dùng chung cho quán và món; món có thêm "Đồ uống"). */
+const DEFAULT_CATEGORIES = ['Bún/Phở', 'Cơm', 'Mì', 'Bánh', 'Cháo', 'Lẩu', 'Nướng', 'Ăn vặt', 'Gà rán', 'Đồ Âu', 'Đồ Nhật',
+  'Đồ Hàn', 'Đồ Thái', 'Đồ Hoa', 'Ốc', 'Nhậu', 'Buffet', 'Cuốn', 'Tráng miệng', 'Cà phê', 'Cà phê mèo', 'Trà sữa', 'Pub/Bar'];
+const CATEGORY_TYPES = { restaurant: 'restaurants', dish: 'dishes' };
 
 const TABLES = {
   restaurants: {
     sheet: 'Restaurants', prefix: 'R', soft: true,
     headers: ['id', 'name', 'category', 'address', 'lat', 'lng', 'open_time', 'close_time', 'open_days',
-      'price_min', 'price_max', 'service', 'rating', 'comment', 'maps_url', 'created_at', 'updated_at', 'deleted'],
-    num: ['lat', 'lng', 'price_min', 'price_max', 'service', 'rating'],
+      'price_min', 'price_max', 'quality', 'price_score', 'space', 'service', 'rating', 'comment', 'maps_url',
+      'created_at', 'updated_at', 'deleted'],
+    num: ['lat', 'lng', 'price_min', 'price_max', 'quality', 'price_score', 'space', 'service', 'rating'],
     bool: ['deleted']
   },
   dishes: {
@@ -64,6 +88,12 @@ const TABLES = {
     num: ['rating'],
     bool: ['is_new_place', 'deleted']
   },
+  categories: {
+    sheet: 'Categories', prefix: 'C', soft: false,
+    headers: ['id', 'type', 'name', 'sort_order', 'created_at', 'updated_at'],
+    num: ['sort_order'],
+    bool: []
+  },
   config: {
     sheet: 'Config', prefix: '', soft: false,
     headers: ['key', 'value', 'note'],
@@ -73,7 +103,7 @@ const TABLES = {
 };
 
 /** Các bảng frontend được phép thêm/sửa/xóa trực tiếp. */
-const CRUD_TABLES = ['restaurants', 'dishes', 'restaurantDishes', 'questions', 'meals'];
+const CRUD_TABLES = ['restaurants', 'dishes', 'restaurantDishes', 'questions', 'meals', 'categories'];
 const READONLY_COLS = ['id', 'created_at', 'updated_at'];
 const PHOTO_FOLDER_NAME = 'Chìu ông hông bíc ăn gì - Ảnh kỷ niệm';
 
@@ -82,9 +112,9 @@ const PHOTO_FOLDER_NAME = 'Chìu ông hông bíc ăn gì - Ảnh kỷ niệm';
 const ACTIONS = {
   ping: () => ({ app: getConfigValue_('app_name') || 'Chìu ông hông bíc ăn gì', time: nowIso_() }),
   bootstrap: () => bootstrap_(),
-  create: (p) => { assertCrud_(p.table); return withLock_(() => insert_(p.table, p.data || {})); },
-  update: (p) => { assertCrud_(p.table); return withLock_(() => update_(p.table, p.id, p.data || {})); },
-  remove: (p) => { assertCrud_(p.table); return withLock_(() => remove_(p.table, p.id)); },
+  create: (p) => { assertCrud_(p.table); return withLock_(() => createRecord_(p.table, p.data || {})); },
+  update: (p) => { assertCrud_(p.table); return withLock_(() => updateRecord_(p.table, p.id, p.data || {})); },
+  remove: (p) => { assertCrud_(p.table); return withLock_(() => removeRecord_(p.table, p.id, p)); },
   linkDishes: (p) => withLock_(() => linkDishes_(p)),
   nextQuestion: (p) => nextQuestion_(bootstrap_(), p),
   suggestDish: (p) => suggestDish_(bootstrap_(), p),
@@ -297,6 +327,181 @@ function linkDishes_(p) {
   }));
 }
 
+// ───────────────────────── THÊM / SỬA / XÓA CÓ KIỂM TRA ─────────────────────────
+// Lớp nằm trên insert_/update_/remove_: kiểm tra phân loại, tự tính điểm quán, xử lý riêng bảng categories.
+
+function findById_(table, id) {
+  return readAll_(table, true).filter((x) => String(x.id) === String(id))[0] || null;
+}
+
+function createRecord_(table, data) {
+  data = Object.assign({}, data);
+  if (table === 'categories') return createCategory_(data);
+  if (table === 'restaurants' || table === 'dishes') data.category = checkCategory_(table, data.category);
+  if (table === 'restaurants') { checkScores_(data); data.rating = calcRating_(data); }
+  return insert_(table, data);
+}
+
+function updateRecord_(table, id, data) {
+  data = Object.assign({}, data);
+  if (table === 'categories') return updateCategory_(id, data);
+  if ((table === 'restaurants' || table === 'dishes') && Object.prototype.hasOwnProperty.call(data, 'category')) {
+    data.category = checkCategory_(table, data.category);
+  }
+  if (table === 'restaurants') {
+    checkScores_(data);
+    const current = findById_('restaurants', id);
+    if (!current) throw new Error('Không tìm thấy bản ghi ' + id);
+    // Ghép tiêu chí mới với giá trị đang lưu rồi tính lại; rating không cho nhập tay.
+    data.rating = calcRating_(Object.assign({}, current, data));
+  }
+  return update_(table, id, data);
+}
+
+function removeRecord_(table, id, p) {
+  if (table === 'categories') return removeCategory_(id, p && p.reassign_to);
+  return remove_(table, id);
+}
+
+/** rating = Σ(w·x) / Σw trên các tiêu chí đang có, làm tròn 2 chữ số. Không có tiêu chí nào → null. */
+function calcRating_(r) {
+  let sum = 0; let w = 0;
+  Object.keys(RATING_WEIGHTS).forEach((k) => {
+    if (r && isNum_(r[k])) { sum += RATING_WEIGHTS[k] * Number(r[k]); w += RATING_WEIGHTS[k]; }
+  });
+  return w ? Math.round(sum / w * 100) / 100 : null;
+}
+
+function checkScores_(data) {
+  Object.keys(RATING_WEIGHTS).forEach((k) => {
+    const v = data[k];
+    if (v === undefined || v === null || v === '') return;
+    const n = Number(v);
+    if (isNaN(n) || n < 0 || n > 5) throw new Error('Điểm ' + RATING_LABELS[k] + ' phải từ 0 đến 5');
+  });
+}
+
+// ───────────────────────── PHÂN LOẠI (CATEGORIES) ─────────────────────────
+
+function categoryTypeOf_(table) { return table === 'restaurants' ? 'restaurant' : 'dish'; }
+function typeLabel_(type) { return type === 'restaurant' ? 'quán' : 'món'; }
+function lower_(s) { return String(s == null ? '' : s).trim().toLowerCase(); }
+
+function categoriesOf_(type) {
+  return readAll_('categories').filter((c) => c.type === type)
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+}
+
+/** Trả về tên phân loại chuẩn (đúng hoa thường như trong danh sách). Danh sách trống thì không kiểm tra. */
+function checkCategory_(table, name) {
+  const v = String(name == null ? '' : name).trim();
+  if (!v) return '';
+  const type = categoryTypeOf_(table);
+  const list = categoriesOf_(type);
+  if (!list.length) return v;
+  const hit = list.filter((c) => lower_(c.name) === lower_(v))[0];
+  if (!hit) throw new Error('Phân loại "' + v + '" chưa có trong danh sách ' + typeLabel_(type) + '. Thêm ở màn Quản lý phân loại trước nha.');
+  return String(hit.name);
+}
+
+/** Đếm quán/món (chưa xóa) đang dùng 1 phân loại. */
+function categoryUsage_(type, name) {
+  return readAll_(CATEGORY_TYPES[type]).filter((x) => lower_(x.category) === lower_(name)).length;
+}
+
+/** Đổi cột category của mọi dòng (kể cả dòng đã xóa mềm) từ oldName sang newName. Trả về số dòng đã đổi. */
+function moveCategory_(table, oldName, newName) {
+  const sh = sheet_(table);
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return 0;
+  const col = headersOf_(sh).indexOf('category') + 1;
+  if (col < 1) return 0;
+  const range = sh.getRange(2, col, lastRow - 1, 1);
+  let n = 0;
+  const vals = range.getValues().map((r) => {
+    if (r[0] !== '' && lower_(r[0]) === lower_(oldName)) { n++; return ["'" + newName]; }
+    return [r[0] === '' ? '' : "'" + r[0]];
+  });
+  if (n) range.setValues(vals);
+  return n;
+}
+
+function createCategory_(data) {
+  const type = String(data.type || '');
+  if (!CATEGORY_TYPES[type]) throw new Error('type phải là "restaurant" hoặc "dish"');
+  const name = String(data.name || '').trim();
+  if (!name) throw new Error('Phân loại phải có tên');
+  const list = categoriesOf_(type);
+  if (list.some((c) => lower_(c.name) === lower_(name))) throw new Error('Đã có phân loại "' + name + '" cho ' + typeLabel_(type));
+  const sortOrder = isNum_(data.sort_order) ? Number(data.sort_order)
+    : list.reduce((m, c) => Math.max(m, Number(c.sort_order) || 0), 0) + 1;
+  return insert_('categories', { type: type, name: name, sort_order: sortOrder });
+}
+
+/** data: {name?, sort_order?}. Đổi tên thì đổi luôn ở mọi quán/món đang dùng tên cũ. */
+function updateCategory_(id, data) {
+  const cur = findById_('categories', id);
+  if (!cur) throw new Error('Không tìm thấy phân loại ' + id);
+  const patch = {};
+  let renamed = 0;
+  if (data.name !== undefined) {
+    const name = String(data.name || '').trim();
+    if (!name) throw new Error('Phân loại phải có tên');
+    if (categoriesOf_(cur.type).some((c) => c.id !== cur.id && lower_(c.name) === lower_(name))) {
+      throw new Error('Đã có phân loại "' + name + '" cho ' + typeLabel_(cur.type));
+    }
+    if (name !== cur.name) renamed = moveCategory_(CATEGORY_TYPES[cur.type], cur.name, name);
+    patch.name = name;
+  }
+  if (data.sort_order !== undefined) {
+    if (!isNum_(data.sort_order)) throw new Error('sort_order phải là số');
+    patch.sort_order = Number(data.sort_order);
+  }
+  return Object.assign(update_('categories', id, patch), { renamed: renamed });
+}
+
+/** Xóa phân loại. Còn quán/món đang dùng thì bắt buộc có reassign_to (tên phân loại khác cùng type). */
+function removeCategory_(id, reassignTo) {
+  const cur = findById_('categories', id);
+  if (!cur) throw new Error('Không tìm thấy phân loại ' + id);
+  const table = CATEGORY_TYPES[cur.type];
+  const used = categoryUsage_(cur.type, cur.name);
+  let target = String(reassignTo == null ? '' : reassignTo).trim();
+  if (target) {
+    const hit = categoriesOf_(cur.type).filter((c) => c.id !== cur.id && lower_(c.name) === lower_(target))[0];
+    if (!hit) throw new Error('Không có phân loại "' + target + '" để chuyển sang');
+    target = String(hit.name);
+  } else if (used) {
+    throw new Error('Còn ' + used + ' ' + typeLabel_(cur.type) + ' đang dùng "' + cur.name + '". Chọn phân loại khác để chuyển sang trước khi xóa.');
+  }
+  const moved = target ? moveCategory_(table, cur.name, target) : 0;
+  remove_('categories', id);
+  return { id: id, deleted: true, moved: moved, moved_to: target || null };
+}
+
+/** Thêm phân loại mặc định + phân loại đang dùng còn thiếu, rồi đánh lại sort_order (giữ thứ tự cũ, cái mới xếp sau). */
+function syncCategories_() {
+  let added = 0;
+  Object.keys(CATEGORY_TYPES).forEach((type) => {
+    const defaults = DEFAULT_CATEGORIES.concat(type === 'dish' ? ['Đồ uống'] : []);
+    const used = readAll_(CATEGORY_TYPES[type], true).map((x) => String(x.category || '').trim()).filter(Boolean);
+    const list = categoriesOf_(type);
+    const have = {}; list.forEach((c) => { have[lower_(c.name)] = true; });
+    defaults.concat(used).forEach((name) => {
+      if (have[lower_(name)]) return;
+      have[lower_(name)] = true;
+      insert_('categories', { type: type, name: name, sort_order: 0 });
+      added++;
+    });
+    // insert_ đặt sort_order = 0 cho cái mới; xếp chúng theo thứ tự thêm vào, sau các phân loại cũ.
+    const all = readAll_('categories').filter((c) => c.type === type);
+    const old = all.filter((c) => Number(c.sort_order) > 0).sort((a, b) => a.sort_order - b.sort_order);
+    const fresh = all.filter((c) => !(Number(c.sort_order) > 0));
+    old.concat(fresh).forEach((c, i) => { if (Number(c.sort_order) !== i + 1) update_('categories', c.id, { sort_order: i + 1 }); });
+  });
+  return added;
+}
+
 // ───────────────────────── CONFIG ─────────────────────────
 
 function readConfig_() {
@@ -374,10 +579,26 @@ function bootstrap_() {
     dishes: dishes,
     restaurantDishes: validLinks,
     questions: questions,
-    dishAttrs: attrs.map((a) => ({ key: a, label: ATTR_LABELS[a] || a })),
+    dishAttrs: dishAttrGroups_(attrs).reduce((out, g) => out.concat(g.attrs), []),
+    dishAttrGroups: dishAttrGroups_(attrs),
+    categories: readAll_('categories').sort((a, b) =>
+      String(a.type).localeCompare(String(b.type)) || (a.sort_order || 0) - (b.sort_order || 0)),
+    ratingWeights: RATING_WEIGHTS,
+    ratingLabels: RATING_LABELS,
     config: config,
     serverTime: nowIso_()
   };
+}
+
+/** Nhóm các cột thuộc tính đang có trong sheet Dishes; cột lạ xếp vào nhóm "Khác". */
+function dishAttrGroups_(attrs) {
+  const groups = DISH_ATTR_GROUPS.map((g) => ({
+    key: g.key, label: g.label,
+    attrs: g.attrs.filter((a) => attrs.indexOf(a[0]) >= 0).map((a) => ({ key: a[0], label: a[1] }))
+  })).filter((g) => g.attrs.length);
+  const other = attrs.filter((a) => !ATTR_LABELS[a]).map((a) => ({ key: a, label: a }));
+  if (other.length) groups.push({ key: 'khac', label: 'Khác', attrs: other });
+  return groups;
 }
 
 // ───────────────────────── LOGIC GỢI Ý MÓN ─────────────────────────
@@ -609,7 +830,7 @@ function saveMeal_(p) {
   if (Array.isArray(meal.tastes)) meal.tastes = meal.tastes.join(', ');
 
   if (p.newRestaurant && p.newRestaurant.name) {
-    const r = insert_('restaurants', p.newRestaurant);
+    const r = createRecord_('restaurants', p.newRestaurant);
     meal.restaurant_id = r.id;
     meal.restaurant_name = r.name;
     meal.is_new_place = true;
@@ -682,7 +903,7 @@ function getStats_(p) {
   const tasteDays = Number(p.tasteDays || 14);
   const allMeals = readAll_('meals');
   const dishes = readAll_('dishes', true);
-  const attrs = dishAttrs_(headersOf_(sheet_('dishes')));
+  const attrs = dishAttrs_(headersOf_(sheet_('dishes'))).filter((a) => TASTE_ATTRS.indexOf(a) >= 0);
   const dMap = {}; dishes.forEach((d) => { dMap[d.id] = d; });
   const inMonth = allMeals.filter((m) => String(m.date || '').slice(0, 7) === month);
 
@@ -764,6 +985,7 @@ function newId_(prefix) { return (prefix ? prefix + '-' : '') + Utilities.getUui
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('Leeming')
     .addItem('Khởi tạo / bổ sung sheet', 'setupSheets')
+    .addItem('Nâng cấp dữ liệu lên V2', 'migrateSchemaV2')
     .addItem('Xem mã truy cập', 'showToken')
     .addItem('Tạo lại mã truy cập', 'resetToken')
     .addSeparator()
@@ -771,8 +993,8 @@ function onOpen() {
     .addToUi();
 }
 
-/** Chạy 1 lần: tạo các sheet, tiêu đề cột, dữ liệu mẫu và mã truy cập. Chạy lại không làm mất dữ liệu. */
-function setupSheets() {
+/** Tạo sheet và cột còn thiếu. Không xóa dữ liệu, cột mới được thêm vào cuối. */
+function ensureSheets_() {
   const ss = SpreadsheetApp.getActive();
   Object.keys(TABLES).forEach((t) => {
     const def = TABLES[t];
@@ -783,7 +1005,6 @@ function setupSheets() {
         .setFontWeight('bold').setBackground('#FFE1D2').setFontColor('#2A1B14');
       sh.setFrozenRows(1);
     } else {
-      // Bổ sung cột còn thiếu nếu cấu trúc thay đổi.
       const existing = headersOf_(sh);
       def.headers.filter((h) => existing.indexOf(h) < 0).forEach((h) => {
         sh.getRange(1, sh.getLastColumn() + 1).setValue(h).setFontWeight('bold').setBackground('#FFE1D2');
@@ -792,13 +1013,119 @@ function setupSheets() {
   });
   const blank = ss.getSheetByName('Sheet1') || ss.getSheetByName('Trang tính1');
   if (blank && blank.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(blank);
+}
 
+/** Chạy 1 lần: tạo các sheet, tiêu đề cột, dữ liệu mẫu và mã truy cập. Chạy lại không làm mất dữ liệu. */
+function setupSheets() {
+  const ss = SpreadsheetApp.getActive();
+  ensureSheets_();
   seedSampleData_();
 
   const props = PropertiesService.getScriptProperties();
   if (!props.getProperty('API_TOKEN')) props.setProperty('API_TOKEN', generateToken_());
   console.log('Đã khởi tạo xong. Mã truy cập: ' + props.getProperty('API_TOKEN'));
   try { ss.toast('Đã khởi tạo xong. Xem mã truy cập ở menu Leeming.', 'Leeming', 8); } catch (e) { /* chạy từ editor */ }
+}
+
+// ───────────────────────── NÂNG CẤP V2 ─────────────────────────
+
+/** Chạy 1 lần sau khi dán Code.gs bản V2. Chạy lại cũng an toàn: chỉ điền chỗ còn trống. */
+function migrateSchemaV2() {
+  return withLock_(() => {
+    ensureSheets_();
+    const cats = syncCategories_();
+    const dishes = migrateDishesV2_();
+    const shops = migrateRestaurantsV2_();
+    const msg = 'Nâng cấp V2 xong: thêm ' + cats + ' phân loại, đoán thuộc tính cho ' + dishes + ' món, tính lại điểm ' + shops + ' quán.';
+    console.log(msg);
+    try { SpreadsheetApp.getActive().toast(msg, 'Leeming', 10); } catch (e) { /* chạy từ editor */ }
+    return { categoriesAdded: cats, dishesGuessed: dishes, restaurantsRated: shops };
+  });
+}
+
+/** Món có mọi cột thuộc tính V2 còn trống thì đoán từ tên + phân loại. Trả về số món đã đoán. */
+function migrateDishesV2_() {
+  const sh = sheet_('dishes');
+  const headers = headersOf_(sh);
+  const lastRow = sh.getLastRow();
+  const attrs = dishAttrs_(headers);
+  const rule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+  if (lastRow < 2) return 0;
+  const values = sh.getRange(2, 1, lastRow - 1, headers.length).getValues();
+  const cols = V2_DISH_ATTRS.map((a) => headers.indexOf(a)).filter((i) => i >= 0);
+  let n = 0;
+  values.forEach((row) => {
+    if (!row.some((c) => c !== '' && c !== null)) return;
+    if (!cols.every((i) => row[i] === '' || row[i] === null)) return;
+    const d = {}; headers.forEach((h, i) => { d[h] = row[i]; });
+    const g = guessDishAttrsV2_(d);
+    cols.forEach((i) => { row[i] = g[headers[i]] === true; });
+    n++;
+  });
+  cols.forEach((i) => sh.getRange(2, i + 1, values.length, 1).setValues(values.map((r) => [r[i] === '' ? false : toBool_(r[i])])));
+  attrs.forEach((a) => sh.getRange(2, headers.indexOf(a) + 1, values.length, 1).setDataValidation(rule));
+  return n;
+}
+
+function hasAny_(text, words) {
+  const t = ' ' + String(text || '').toLowerCase().replace(/[^0-9a-zà-ỹđ]+/g, ' ') + ' ';
+  return words.some((w) => t.indexOf(' ' + w + ' ') >= 0);
+}
+
+/** Đoán thuộc tính V2 (nền ẩm thực, thành phần, đồ lạnh, đồ chay) từ tên + phân loại món. */
+function guessDishAttrsV2_(d) {
+  const name = String(d.name || '');
+  const cat = String(d.category || '').trim();
+  const out = {};
+  const drinkCats = ['Đồ uống', 'Cà phê', 'Cà phê mèo', 'Trà sữa', 'Pub/Bar'];
+  const isDrink = drinkCats.indexOf(cat) >= 0 || hasAny_(name, ['trà sữa', 'cà phê', 'cafe', 'coffee', 'sinh tố', 'nước ép', 'bia', 'cocktail', 'trà']);
+  const cuisineByCat = { 'Đồ Hàn': 'do_han', 'Đồ Thái': 'do_thai', 'Đồ Nhật': 'do_nhat', 'Đồ Âu': 'do_au', 'Đồ Hoa': 'do_trung' };
+  let cuisine = cuisineByCat[cat] || null;
+  if (!cuisine) {
+    if (hasAny_(name, ['sushi', 'sashimi', 'ramen', 'udon', 'tempura', 'takoyaki', 'nhật'])) cuisine = 'do_nhat';
+    else if (hasAny_(name, ['kimchi', 'tokbokki', 'tteokbokki', 'bibimbap', 'kimbap', 'hàn', 'hàn quốc'])) cuisine = 'do_han';
+    else if (hasAny_(name, ['thái', 'tom yum', 'tomyum', 'pad thai'])) cuisine = 'do_thai';
+    else if (hasAny_(name, ['pizza', 'pasta', 'spaghetti', 'burger', 'hamburger', 'steak', 'bít tết', 'salad', 'sandwich'])) cuisine = 'do_au';
+    else if (hasAny_(name, ['dimsum', 'há cảo', 'sủi cảo', 'xíu mại', 'vằn thắn', 'hoành thánh', 'mì vịt tiềm', 'lẩu tứ xuyên'])) cuisine = 'do_trung';
+    else if (!isDrink) cuisine = 'do_viet';
+  }
+  if (cuisine) out[cuisine] = true;
+
+  if (hasAny_(name, ['bò', 'bê'])) out.tp_bo = true;
+  if (hasAny_(name, ['gà'])) out.tp_ga = true;
+  if (hasAny_(name, ['vịt'])) out.tp_vit = true;
+  if (hasAny_(name, ['ngan'])) out.tp_ngan = true;
+  if (hasAny_(name, ['lợn', 'heo', 'sườn', 'nem', 'chả', 'bún chả', 'xá xíu', 'ba chỉ', 'giò', 'pate', 'lòng', 'dồi', 'cơm tấm', 'thịt xiên', 'thịt nướng'])) out.tp_lon = true;
+  if (hasAny_(name, ['cá'])) out.tp_ca = true;
+  if (hasAny_(name, ['ốc', 'tôm', 'ghẹ', 'cua', 'mực', 'hàu', 'sò', 'ngao', 'hến', 'hải sản', 'bạch tuộc', 'riêu']) || cat === 'Ốc') out.tp_haisan = true;
+  if (hasAny_(name, ['trứng', 'ốp la'])) out.tp_trung = true;
+  if (hasAny_(name, ['chay'])) out.chay = true;
+
+  const cold = isDrink || cat === 'Tráng miệng' || hasAny_(name, ['kem', 'chè', 'sữa chua', 'đá', 'lạnh', 'trà sữa', 'sinh tố', 'nộm', 'gỏi']);
+  if (cold && !toBool_(d.nong)) out.lanh = true;
+  return out;
+}
+
+/** Quán chưa có điểm Chất lượng thì lấy rating cũ, sau đó tính lại rating cho mọi dòng. Trả về số quán có điểm. */
+function migrateRestaurantsV2_() {
+  const sh = sheet_('restaurants');
+  const headers = headersOf_(sh);
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return 0;
+  const range = sh.getRange(2, 1, lastRow - 1, headers.length);
+  const values = range.getValues();
+  const qi = headers.indexOf('quality'); const ri = headers.indexOf('rating');
+  let n = 0;
+  values.forEach((row) => {
+    const o = {}; headers.forEach((h, i) => { o[h] = row[i]; });
+    if (!isNum_(o.quality) && isNum_(o.rating)) { o.quality = Number(o.rating); row[qi] = o.quality; }
+    const r = calcRating_(o);
+    row[ri] = r == null ? '' : r;
+    if (r != null) n++;
+  });
+  sh.getRange(2, qi + 1, values.length, 1).setValues(values.map((r) => [r[qi]]));
+  sh.getRange(2, ri + 1, values.length, 1).setValues(values.map((r) => [r[ri]]));
+  return n;
 }
 
 function generateToken_() {
@@ -830,6 +1157,8 @@ function seedSampleData_() {
     sheet_('config').getRange(2, 1, cfg.length, 3).setValues(cfg.map((r) => r.map((v) => (v === '' ? '' : "'" + v))));
   }
 
+  if (readAll_('categories').length === 0) syncCategories_();
+
   if (readAll_('questions').length === 0) {
     [
       [1, 'Hôm nay bụng muốn…', 'Có nước, húp xì xụp', 'nuoc=TRUE', 'Khô ráo, gắp gắp', 'kho=TRUE'],
@@ -837,7 +1166,8 @@ function seedSampleData_() {
       [3, 'Đói cỡ nào rồi?', 'Đói meo, ăn no căng', 'an_no=TRUE', 'Ăn chơi, nhâm nhi', 'an_vat=TRUE'],
       [4, 'Ngọt ngào hay mặn mà?', 'Ngọt ngào', 'ngot=TRUE', 'Mặn mà đậm đà', 'man=TRUE'],
       [5, 'Béo ngậy hay thanh mát?', 'Béo ngậy', 'beo=TRUE', 'Thanh mát', 'beo=FALSE'],
-      [6, 'Nóng hổi hay mát lạnh?', 'Nóng hổi', 'nong=TRUE', 'Mát lạnh', 'nong=FALSE']
+      [6, 'Nóng hổi hay mát lạnh?', 'Nóng hổi', 'nong=TRUE', 'Mát lạnh', 'lanh=TRUE'],
+      [7, 'Hôm nay ăn kiểu gì?', 'Đồ Việt cho chắc bụng', 'do_viet=TRUE', 'Đổi gió món ngoại', 'do_viet=FALSE']
     ].forEach((q) => insert_('questions', {
       sort_order: q[0], text: q[1], option_a: q[2], rule_a: q[3], option_b: q[4], rule_b: q[5], active: true
     }));
@@ -845,41 +1175,46 @@ function seedSampleData_() {
 
   if (readAll_('dishes').length === 0) {
     const sample = [
-      ['Phở bò', 'Bún/Phở', 'nuoc nong an_no man'],
-      ['Bún chả', 'Bún/Phở', 'nuoc ngot beo an_no'],
-      ['Bún bò Huế', 'Bún/Phở', 'nuoc cay nong an_no man'],
-      ['Bún riêu', 'Bún/Phở', 'nuoc chua nong an_no'],
-      ['Cơm tấm', 'Cơm', 'kho beo man an_no nong'],
-      ['Mì trộn cay', 'Mì', 'kho cay an_no nong'],
-      ['Bánh cuốn', 'Bánh', 'kho nong'],
-      ['Lẩu thái', 'Lẩu', 'nuoc cay chua nong an_no'],
-      ['Nem chua rán', 'Ăn vặt', 'kho beo chua nong an_vat'],
-      ['Ốc luộc', 'Ăn vặt', 'nuoc cay nong an_vat'],
-      ['Bánh mì pate', 'Bánh', 'kho beo man an_vat'],
-      ['Chè', 'Ăn vặt', 'nuoc ngot an_vat']
+      ['Phở bò', 'Bún/Phở', 'nuoc nong an_no man do_viet tp_bo'],
+      ['Bún chả', 'Bún/Phở', 'nuoc ngot beo nong an_no do_viet tp_lon'],
+      ['Bún bò Huế', 'Bún/Phở', 'nuoc cay nong an_no man do_viet tp_bo tp_lon'],
+      ['Bún riêu', 'Bún/Phở', 'nuoc chua nong an_no do_viet tp_haisan'],
+      ['Cơm tấm', 'Cơm', 'kho beo man an_no nong do_viet tp_lon tp_trung'],
+      ['Mì trộn cay', 'Mì', 'kho cay an_no nong do_han tp_trung'],
+      ['Bánh cuốn', 'Bánh', 'kho nong do_viet tp_lon'],
+      ['Lẩu thái', 'Lẩu', 'nuoc cay chua nong an_no do_thai tp_haisan'],
+      ['Nem chua rán', 'Ăn vặt', 'kho beo chua nong an_vat do_viet tp_lon'],
+      ['Ốc luộc', 'Ốc', 'nuoc cay nong an_vat do_viet tp_haisan'],
+      ['Bánh mì pate', 'Bánh', 'kho beo man an_vat do_viet tp_lon'],
+      ['Gà rán', 'Gà rán', 'kho beo man nong an_no do_au tp_ga'],
+      ['Chè', 'Tráng miệng', 'nuoc ngot lanh an_vat do_viet chay'],
+      ['Trà sữa', 'Đồ uống', 'ngot beo lanh an_vat']
     ];
     const ids = {};
     sample.forEach((s) => {
       const data = { name: s[0], category: s[1] };
       const on = s[2].split(' ');
       DISH_ATTRS.forEach((a) => { data[a] = on.indexOf(a) >= 0; });
-      ids[s[0]] = insert_('dishes', data).id;
+      ids[s[0]] = createRecord_('dishes', data).id;
     });
 
     if (readAll_('restaurants').length === 0) {
-      const r1 = insert_('restaurants', {
+      const r1 = createRecord_('restaurants', {
         name: '[Mẫu] Quán phở đầu ngõ', category: 'Bún/Phở', address: '[Địa chỉ]', lat: 21.0285, lng: 105.8542,
-        open_time: '06:00', close_time: '22:00', open_days: '', price_min: 40000, price_max: 70000, service: 4, rating: 4.5,
+        open_time: '06:00', close_time: '22:00', open_days: '', price_min: 40000, price_max: 70000,
+        quality: 4.5, price_score: 4, space: 3.5, service: 4,
         comment: 'Dữ liệu mẫu — sửa hoặc xóa đi nhé'
       });
-      const r2 = insert_('restaurants', {
+      const r2 = createRecord_('restaurants', {
         name: '[Mẫu] Quán bún chả', category: 'Bún/Phở', address: '[Địa chỉ]', lat: 21.0333, lng: 105.8490,
-        open_time: '10:00', close_time: '20:00', open_days: 'T2-CN', price_min: 40000, price_max: 60000, service: 4, rating: 4.3,
+        open_time: '10:00', close_time: '20:00', open_days: 'T2-CN', price_min: 40000, price_max: 60000,
+        quality: 4.5, price_score: 4.5, space: 3, service: 4,
         comment: 'Dữ liệu mẫu'
       });
-      const r3 = insert_('restaurants', {
-        name: '[Mẫu] Quán ăn đêm', category: 'Ăn vặt', address: '[Địa chỉ]', lat: 21.0245, lng: 105.8412,
-        open_time: '17:00', close_time: '02:00', open_days: '', price_min: 50000, price_max: 150000, service: 3, rating: 4.0,
+      const r3 = createRecord_('restaurants', {
+        name: '[Mẫu] Quán ăn đêm', category: 'Nhậu', address: '[Địa chỉ]', lat: 21.0245, lng: 105.8412,
+        open_time: '17:00', close_time: '02:00', open_days: '', price_min: 50000, price_max: 150000,
+        quality: 4, price_score: 3.5, space: 4, service: 3,
         comment: 'Dữ liệu mẫu — quán mở qua đêm'
       });
       [
@@ -887,7 +1222,7 @@ function seedSampleData_() {
         [r2.id, ids['Bún chả'], 50000], [r2.id, ids['Bún bò Huế'], 50000], [r2.id, ids['Cơm tấm'], 55000],
         [r3.id, ids['Ốc luộc'], 80000], [r3.id, ids['Nem chua rán'], 50000], [r3.id, ids['Lẩu thái'], 200000],
         [r3.id, ids['Mì trộn cay'], 45000], [r3.id, ids['Bánh mì pate'], 25000], [r3.id, ids['Chè'], 25000],
-        [r3.id, ids['Phở bò'], 50000]
+        [r3.id, ids['Phở bò'], 50000], [r3.id, ids['Gà rán'], 60000], [r3.id, ids['Trà sữa'], 30000]
       ].forEach((l) => insert_('restaurantDishes', { restaurant_id: l[0], dish_id: l[1], price: l[2] }));
     }
   }

@@ -12,7 +12,9 @@
   var CFG = window.APP_CONFIG || {};
   var DEMO = !CFG.API_URL;
   var WRITE_ACTIONS = { create: 1, update: 1, remove: 1, linkDishes: 1, saveSession: 1, saveMeal: 1 };
-  var TASTE_CHIPS = ['Cay', 'Ngọt', 'Chua', 'Béo', 'Mặn', 'Đậm đà', 'Thanh', 'Nhạt'];
+  var EXTRA_TASTES = ['Đậm đà', 'Thanh', 'Nhạt'];
+  var SCORE_KEYS = ['quality', 'price_score', 'space', 'service'];
+  var SCORE_LABELS = { quality: 'Chất lượng', price_score: 'Giá', space: 'Không gian', service: 'Phục vụ' };
   var DAY_CHIPS = [[1, 'T2'], [2, 'T3'], [3, 'T4'], [4, 'T5'], [5, 'T6'], [6, 'T7'], [0, 'CN']];
 
   var S = {
@@ -26,6 +28,7 @@
     memo: null,
     memories: null,
     book: { tab: 'shops', q: '', cat: 'Tất cả' },
+    cats: { tab: 'restaurant', edit: null, busy: false, back: '#/settings' },
     stats: { month: null, data: null, loading: false },
     pos: null
   };
@@ -86,10 +89,91 @@
   function dishAttrsOn(d) {
     return (S.data.dishAttrs || []).filter(function (a) { return d[a.key] === true; }).map(function (a) { return a.label; });
   }
-  function categories(list) {
-    var seen = {};
-    list.forEach(function (x) { if (x.category) seen[x.category] = true; });
-    return Object.keys(seen).sort(function (a, b) { return a.localeCompare(b, 'vi'); });
+  function attrGroups() {
+    return S.data.dishAttrGroups || [{ key: 'all', label: 'Đặc điểm', attrs: S.data.dishAttrs || [] }];
+  }
+  /** Chip vị cho kỷ niệm: các vị của món (lấy từ backend) + vài cảm nhận thêm. */
+  function tasteChips() {
+    var vi = attrGroups().filter(function (g) { return g.key === 'vi'; })[0];
+    var base = vi ? vi.attrs.map(function (a) { return a.label; }) : ['Cay', 'Ngọt', 'Chua', 'Béo', 'Mặn'];
+    return base.concat(EXTRA_TASTES.filter(function (t) { return base.indexOf(t) < 0; }));
+  }
+  function lower(s) { return String(s == null ? '' : s).trim().toLowerCase(); }
+  /** Phân loại cố định của 1 loại ('restaurant' | 'dish'), theo sort_order. */
+  function catList(type) {
+    return (S.data.categories || []).filter(function (c) { return c.type === type; })
+      .sort(function (a, b) { return (a.sort_order || 0) - (b.sort_order || 0); });
+  }
+  function catItems(type) { return type === 'restaurant' ? S.data.restaurants : S.data.dishes; }
+  function catUsage(type) {
+    var n = {};
+    catItems(type).forEach(function (x) { if (x.category) n[lower(x.category)] = (n[lower(x.category)] || 0) + 1; });
+    return n;
+  }
+  function typeWord(type) { return type === 'restaurant' ? 'quán' : 'món'; }
+  /** Phân loại đang được dùng, xếp theo thứ tự trong danh sách cố định. */
+  function categories(list, type) {
+    var used = {};
+    list.forEach(function (x) { if (x.category) used[x.category] = true; });
+    var out = catList(type).map(function (c) { return c.name; }).filter(function (n) { return used[n]; });
+    Object.keys(used).sort(function (a, b) { return a.localeCompare(b, 'vi'); }).forEach(function (n) { if (out.indexOf(n) < 0) out.push(n); });
+    return out;
+  }
+  function categoryField(type, value, id) {
+    var list = catList(type); var v = value || '';
+    var known = list.some(function (c) { return c.name === v; });
+    return '<div class="field"><div class="label-row"><label for="' + id + '">Phân loại</label>' +
+      '<a class="small" href="#/cats/' + type + '">Sửa danh sách</a></div>' +
+      '<select class="select" id="' + id + '" name="category"><option value="">— Chưa phân loại —</option>' +
+      (v && !known ? '<option value="' + esc(v) + '" selected>' + esc(v) + ' (chưa có trong danh sách)</option>' : '') +
+      list.map(function (c) { return '<option value="' + esc(c.name) + '"' + (c.name === v ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('') +
+      '</select>' + (list.length ? '' : '<span class="small muted">Chưa có danh sách phân loại ' + typeWord(type) + '.</span>') + '</div>';
+  }
+
+  // ── Điểm quán: 4 tiêu chí 0–5, điểm chung tính theo trọng số từ backend ──
+  function scoreLabel(k) { return (S.data.ratingLabels && S.data.ratingLabels[k]) || SCORE_LABELS[k]; }
+  function hasScore(v) { return v !== null && v !== undefined && v !== '' && !isNaN(Number(v)); }
+  function fmtScore(n) { return String(Math.round(Number(n) * 100) / 100).replace('.', ','); }
+  /** Cùng công thức với calcRating_ ở backend: Σ(w·x) / Σw trên các tiêu chí đang có. */
+  function calcRating(r) {
+    var w = S.data.ratingWeights || { quality: 0.5, service: 0.2, price_score: 0.2, space: 0.1 };
+    var sum = 0; var tw = 0;
+    Object.keys(w).forEach(function (k) { if (hasScore(r[k])) { sum += w[k] * Number(r[k]); tw += w[k]; } });
+    return tw ? Math.round(sum / tw * 100) / 100 : null;
+  }
+  function subScores(r) {
+    return SCORE_KEYS.filter(function (k) { return hasScore(r[k]); }).map(function (k) { return scoreLabel(k) + ' ' + fmtScore(r[k]); }).join(' · ');
+  }
+  function shopScore(r) { return r.rating != null ? r.rating : r.score; }
+  function scoreFields(r) {
+    var w = S.data.ratingWeights || {};
+    var formula = Object.keys(w).sort(function (a, b) { return w[b] - w[a]; })
+      .map(function (k) { return Math.round(w[k] * 100) + '% ' + scoreLabel(k); }).join(' + ');
+    var overall = calcRating(r);
+    return '<div class="field"><span class="label">Chấm điểm quán</span>' +
+      '<span class="small muted">Kéo từ 0 đến 5, bước 0,5. Chưa biết thì để trống.</span><div class="scores">' +
+      SCORE_KEYS.map(function (k) {
+        var has = hasScore(r[k]);
+        return '<div class="score-row"><label for="sc-' + k + '">' + esc(scoreLabel(k)) + '</label>' +
+          '<input type="range" id="sc-' + k + '" name="' + k + '" min="0" max="5" step="0.5" value="' + (has ? Number(r[k]) : 0) + '" data-input="score"' + (has ? '' : ' data-empty="1"') + '>' +
+          '<output for="sc-' + k + '">' + (has ? fmtScore(r[k]) : '–') + '</output>' +
+          '<button type="button" class="clear" data-act="clearScore" data-k="' + k + '" aria-label="Bỏ điểm ' + esc(scoreLabel(k)) + '">' + I.close + '</button></div>';
+      }).join('') + '</div>' +
+      '<div class="overall"><span>Điểm chung</span><b data-overall>' + (overall == null ? '–' : fmtScore(overall)) + '</b></div>' +
+      (formula ? '<span class="small muted">= ' + esc(formula) + '. Thiếu tiêu chí nào thì chia lại theo các tiêu chí còn lại.</span>' : '') + '</div>';
+  }
+  function readScores(form, into) {
+    SCORE_KEYS.forEach(function (k) {
+      var el = form.elements[k];
+      if (el) into[k] = el.dataset.empty === '1' ? '' : Number(el.value);
+    });
+    return into;
+  }
+  function refreshOverall(form) {
+    var b = form.querySelector('[data-overall]');
+    if (!b) return;
+    var r = calcRating(readScores(form, {}));
+    b.textContent = r == null ? '–' : fmtScore(r);
   }
   function byName(a, b) { return String(a.name).localeCompare(String(b.name), 'vi'); }
 
@@ -121,6 +205,11 @@
     bowl: svg('<path d="M3 12h18a9 9 0 0 1-18 0zM7 8c0-2 2-2 2-4M12 8c0-2 2-2 2-4M17 8c0-2 2-2 2-4"/>', ' stroke-width="1.6"'),
     plus: svg('<path d="M12 5v14M5 12h14"/>', ' stroke-width="2.4"'),
     search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>'),
+    up: svg('<path d="M6 15l6-6 6 6"/>'),
+    down: svg('<path d="M6 9l6 6 6-6"/>'),
+    edit: svg('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>'),
+    trash: svg('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>'),
+    tag: svg('<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/>'),
     pin: svg('<path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>'),
     star: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="#E9A23B" stroke="#E9A23B" stroke-width="1.5" stroke-linejoin="round"><path d="M12 3l2.8 5.8 6.2.9-4.5 4.4 1 6.2L12 17.4 6.5 20.3l1-6.2L3 9.7l6.2-.9z"/></svg>',
     starInput: '<svg viewBox="0 0 24 24" aria-hidden="true" stroke-linejoin="round"><path d="M12 3l2.8 5.8 6.2.9-4.5 4.4 1 6.2L12 17.4 6.5 20.3l1-6.2L3 9.7l6.2-.9z"/></svg>'
@@ -207,7 +296,11 @@
 
   // ───────────────────────── Dữ liệu dùng thử ─────────────────────────
   function demoInit() {
-    if (GasDemo.hasData()) return;
+    if (GasDemo.hasData()) {
+      // Dữ liệu dùng thử tạo từ bản cũ: nâng cấp tại chỗ giống như chạy migrateSchemaV2() trên Sheet thật.
+      if (!SpreadsheetApp.getActive().getSheetByName('Categories')) { migrateSchemaV2(); GasDemo.save(); }
+      return;
+    }
     setupSheets();
     setConfigValue_('home_lat', '21.0285');
     setConfigValue_('home_lng', '105.8542');
@@ -243,6 +336,9 @@
     if (name === 'places' && !S.pick) name = S.ask ? 'ask' : 'home';
     if (name === 'memo' && !S.memo) name = 'home';
     var changed = S.route !== name || S.param !== param;
+    if (name === 'cats' && S.route !== 'cats') { S.cats.back = S.lastHash && !/^#\/?cats/.test(S.lastHash) ? S.lastHash : '#/settings'; S.cats.edit = null; }
+    S.lastHash = location.hash || '#/home';
+    closeModal();
     S.route = name; S.param = param;
     render();
     if (changed) window.scrollTo(0, 0);
@@ -427,11 +523,12 @@
       : r.location_source === 'none' ? 'Chưa bật vị trí nên chưa biết quán nào gần nhất.' : '';
     var cards = list.map(function (x) {
       var badges = (x.is_best ? '<span class="badge">Ngon nhất</span>' : '') + (x.is_nearest ? '<span class="badge badge-green">Gần nhất</span>' : '');
-      var score = x.dish_rating != null ? x.dish_rating : x.score;
+      var score = shopScore(x); var subs = subScores(x);
       return '<article class="card place">' + (badges ? '<div class="chips">' + badges + '</div>' : '') +
         '<div class="top"><div class="stack" style="gap:3px;min-width:0"><span class="name">' + esc(x.name) + '</span>' +
         (x.address ? '<span class="small muted">' + esc(x.address) + '</span>' : '') + '</div>' +
         (score != null ? '<span class="rating">' + I.star + Number(score).toFixed(1) + '</span>' : '') + '</div>' +
+        (subs || x.dish_rating != null ? '<span class="small muted">' + esc([subs, x.dish_rating != null ? 'Món này ' + fmtScore(x.dish_rating) : ''].filter(Boolean).join(' · ')) + '</span>' : '') +
         '<div class="meta">' + [kmText(x.distance_km), x.close_time ? 'Mở đến ' + esc(x.close_time) : '', priceText(x)].filter(Boolean).map(function (t) { return '<span>' + t + '</span>'; }).join('') + '</div>' +
         '<div class="btn-row">' + (x.maps_link ? '<a class="btn btn-outline" href="' + esc(x.maps_link) + '" target="_blank" rel="noopener">Chỉ đường</a>' : '') +
         '<button class="btn btn-primary" data-act="pickPlace" data-id="' + esc(x.id) + '">Chọn quán này</button></div></article>';
@@ -477,6 +574,7 @@
         '<div class="stack" id="new-place">' +
         '<div class="field"><label for="m-name">Tên quán mới</label><input class="input" id="m-name" name="placeName" placeholder="Quán gì đó ngon ngon"></div>' +
         '<div class="field"><label for="m-addr">Địa chỉ</label><input class="input" id="m-addr" name="placeAddr" placeholder="Không bắt buộc"></div>' +
+        categoryField('restaurant', '', 'm-cat') + scoreFields({}) +
         '<label class="row small" style="gap:8px"><input type="checkbox" name="useLoc" checked style="width:20px;height:20px;accent-color:var(--accent)"> Lưu vị trí hiện tại làm vị trí quán</label></div>' +
         '<div class="field"><label for="m-dish">Món</label><select class="select" id="m-dish" name="dish" data-change="dishSel">' +
         '<option value="">— Chọn món —</option>' +
@@ -490,7 +588,7 @@
       '<input type="file" accept="image/*" name="photo" aria-label="Chụp hoặc chọn ảnh bữa ăn"></label>' +
       '<div class="field"><span class="label">Chấm điểm</span>' + starsInput('rating', 0) + '</div>' +
       '<div class="field"><span class="label">Hôm nay vị thế nào?</span><div class="chips">' +
-      TASTE_CHIPS.map(function (t) { return '<label class="toggle"><input type="checkbox" name="taste" value="' + esc(t) + '"><span>' + esc(t) + '</span></label>'; }).join('') + '</div></div>' +
+      tasteChips().map(function (t) { return '<label class="toggle"><input type="checkbox" name="taste" value="' + esc(t) + '"><span>' + esc(t) + '</span></label>'; }).join('') + '</div></div>' +
       '<div class="field"><label for="m-feel">Cảm nhận</label><textarea class="textarea" id="m-feel" name="feeling" placeholder="Nước dùng ngọt, quán đông, lần sau đi sớm hơn…"></textarea></div>' +
       '<button class="btn btn-primary btn-block" type="submit">Lưu kỷ niệm</button></form></section>';
   }
@@ -508,7 +606,7 @@
       if (place === '__new') {
         var name = String(fd.get('placeName') || '').trim();
         if (!name) { toast('Cá ghi tên quán giúp ' + bot() + ' nha', true); $('#m-name').focus(); return; }
-        payload.newRestaurant = { name: name, address: String(fd.get('placeAddr') || '').trim() };
+        payload.newRestaurant = readScores(form, { name: name, address: String(fd.get('placeAddr') || '').trim(), category: String(fd.get('category') || '') });
         if (fd.get('useLoc')) prep = getPos(true).then(function (pos) { if (pos) { payload.newRestaurant.lat = pos.lat; payload.newRestaurant.lng = pos.lng; } });
       } else {
         meal.restaurant_id = place;
@@ -571,7 +669,7 @@
   // ───────────────────────── Màn: sổ quán & món ─────────────────────────
   function vBook() {
     var b = S.book; var shops = b.tab === 'shops';
-    var cats = ['Tất cả'].concat(categories(shops ? S.data.restaurants : S.data.dishes));
+    var cats = ['Tất cả'].concat(categories(shops ? S.data.restaurants : S.data.dishes, shops ? 'restaurant' : 'dish'));
     if (cats.indexOf(b.cat) < 0) b.cat = 'Tất cả';
     return '<section class="screen with-nav">' + topbar(null, null, 'Sổ ăn uống') +
       '<div class="segmented" role="tablist">' +
@@ -581,7 +679,7 @@
       '<input id="bq" type="search" data-input="bookq" value="' + esc(b.q) + '" placeholder="' + (shops ? 'Tìm quán theo tên, địa chỉ…' : 'Tìm món…') + '"></div>' +
       '<div class="chips">' + cats.map(function (c) {
         return '<button class="filter' + (c === b.cat ? ' on' : '') + '" data-act="bookCat" data-c="' + esc(c) + '">' + esc(c) + '</button>';
-      }).join('') + '</div>' +
+      }).join('') + '<a class="filter filter-link" href="#/cats/' + (shops ? 'restaurant' : 'dish') + '">' + I.tag + 'Sửa phân loại</a></div>' +
       '<div class="list" id="book-list">' + bookList() + '</div></section>' +
       '<button class="fab" data-act="' + (shops ? 'newShop' : 'newDish') + '">' + I.plus + (shops ? 'Thêm quán' : 'Thêm món') + '</button>' + nav('book');
   }
@@ -591,14 +689,14 @@
     var match = function (x, fields) { return (b.cat === 'Tất cả' || x.category === b.cat) && (!q || fields.some(function (f) { return norm(x[f]).indexOf(q) >= 0; })); };
     if (b.tab === 'shops') {
       var list = S.data.restaurants.filter(function (r) { return match(r, ['name', 'address', 'category']); })
-        .sort(function (a, c) { return (c.score || 0) - (a.score || 0); });
+        .sort(function (a, c) { return (shopScore(c) || 0) - (shopScore(a) || 0); });
       if (!list.length) return '<div class="card empty">Không thấy quán nào.</div>';
       return list.map(function (r) {
         var meta = [r.category, priceText(r), r.visit_count ? 'đã ăn ' + r.visit_count + ' lần' : 'chưa ăn lần nào'].filter(Boolean).join(' · ');
         return '<button class="card list-item" data-act="openShop" data-id="' + esc(r.id) + '" style="padding:14px">' +
           '<span class="avatar">' + esc(String(r.name).replace(/^\[.*?\]\s*/, '').charAt(0).toUpperCase()) + '</span>' +
           '<span class="stack grow" style="gap:2px"><strong>' + esc(r.name) + '</strong><span class="small muted">' + esc(meta) + '</span></span>' +
-          (r.score != null ? '<span class="rating" style="font-size:14px">' + I.star + Number(r.score).toFixed(1) + '</span>' : '') + '</button>';
+          (shopScore(r) != null ? '<span class="rating" style="font-size:14px">' + I.star + Number(shopScore(r)).toFixed(1) + '</span>' : '') + '</button>';
       }).join('');
     }
     var dl = S.data.dishes.filter(function (d) { return match(d, ['name', 'category']); })
@@ -626,8 +724,7 @@
     return '<section class="screen">' + topbar('#/book', isNew ? 'Thêm vào sổ' : 'Sửa thông tin', isNew ? 'Quán mới' : r.name) +
       '<form data-form="shop" class="stack" style="gap:16px">' +
       '<div class="field"><label for="s-name">Tên quán *</label><input class="input" id="s-name" name="name" required value="' + v('name') + '"></div>' +
-      '<div class="field"><label for="s-cat">Phân loại</label><input class="input" id="s-cat" name="category" list="shop-cats" value="' + v('category') + '" placeholder="Bún/Phở, Cơm, Lẩu…">' +
-      '<datalist id="shop-cats">' + categories(S.data.restaurants.concat(S.data.dishes)).map(function (c) { return '<option value="' + esc(c) + '">'; }).join('') + '</datalist></div>' +
+      categoryField('restaurant', r.category, 's-cat') +
       '<div class="field"><label for="s-addr">Địa chỉ</label><input class="input" id="s-addr" name="address" value="' + v('address') + '"></div>' +
       '<div class="field"><label for="s-map">Link Google Maps hoặc tọa độ</label><input class="input" id="s-map" name="maps_url" data-change="mapLink" value="' + v('maps_url') + '" placeholder="Dán link, hoặc 21.0285, 105.8542">' +
       '<div class="grid-2"><input class="input" name="lat" inputmode="decimal" aria-label="Vĩ độ" placeholder="Vĩ độ" value="' + v('lat') + '">' +
@@ -643,9 +740,7 @@
       '<div class="field"><span class="label">Giá (đồng)</span><div class="grid-2">' +
       '<input class="input" type="number" inputmode="numeric" step="1000" min="0" name="price_min" aria-label="Giá thấp nhất" placeholder="Từ, vd 40000" value="' + v('price_min') + '">' +
       '<input class="input" type="number" inputmode="numeric" step="1000" min="0" name="price_max" aria-label="Giá cao nhất" placeholder="Đến, vd 70000" value="' + v('price_max') + '"></div></div>' +
-      '<div class="field"><span class="label">Điểm của quán</span>' + starsInput('rating', Math.round(r.rating || 0)) + '</div>' +
-      '<div class="field"><label for="s-svc">Phục vụ</label><select class="select" id="s-svc" name="service"><option value="">—</option>' +
-      [5, 4, 3, 2, 1].map(function (n) { return '<option value="' + n + '"' + (Number(r.service) === n ? ' selected' : '') + '>' + n + ' / 5</option>'; }).join('') + '</select></div>' +
+      scoreFields(r) +
       '<div class="field"><label for="s-cmt">Nhận xét</label><textarea class="textarea" id="s-cmt" name="comment">' + v('comment') + '</textarea></div>' +
       '<div class="field"><span class="label">Quán có bán món</span>' +
       (dishes.length ? '<div class="dish-pick">' + dishes.map(function (d) {
@@ -673,9 +768,10 @@
       name: String(fd.get('name') || '').trim(), category: String(fd.get('category') || '').trim(), address: String(fd.get('address') || '').trim(),
       maps_url: String(fd.get('maps_url') || '').trim(), lat: fd.get('lat'), lng: fd.get('lng'),
       open_time: fd.get('open_time'), close_time: fd.get('close_time'), open_days: openDays,
-      price_min: fd.get('price_min'), price_max: fd.get('price_max'), rating: fd.get('rating') || '', service: fd.get('service'),
+      price_min: fd.get('price_min'), price_max: fd.get('price_max'),
       comment: String(fd.get('comment') || '').trim()
     };
+    readScores(form, data);
     if (!data.name) { toast('Quán phải có tên nha', true); return; }
     if (/^-?\d/.test(data.maps_url) && parseCoords(data.maps_url)) data.maps_url = '';
     var dishes = fd.getAll('dish').map(function (id) { return { dish_id: id, price: fd.get('price_' + id) || '' }; });
@@ -702,12 +798,13 @@
     return '<section class="screen">' + topbar('#/book', isNew ? 'Thêm vào sổ' : 'Sửa món', isNew ? 'Món mới' : d.name) +
       '<form data-form="dish" class="stack" style="gap:16px">' +
       '<div class="field"><label for="d-name">Tên món *</label><input class="input" id="d-name" name="name" required value="' + v('name') + '"></div>' +
-      '<div class="field"><label for="d-cat">Phân loại</label><input class="input" id="d-cat" name="category" list="dish-cats" value="' + v('category') + '" placeholder="Bún/Phở, Cơm, Ăn vặt…">' +
-      '<datalist id="dish-cats">' + categories(S.data.dishes).map(function (c) { return '<option value="' + esc(c) + '">'; }).join('') + '</datalist></div>' +
-      '<div class="field"><span class="label">Đặc điểm</span><span class="small muted">Chọn hết những gì đúng với món này — ' + esc(bot()) + ' dựa vào đây để hỏi A/B.</span><div class="chips">' +
-      (S.data.dishAttrs || []).map(function (a) {
-        return '<label class="toggle"><input type="checkbox" name="attr" value="' + esc(a.key) + '"' + (d[a.key] === true ? ' checked' : '') + '><span>' + esc(a.label) + '</span></label>';
-      }).join('') + '</div></div>' +
+      categoryField('dish', d.category, 'd-cat') +
+      '<div class="field"><span class="label">Đặc điểm</span><span class="small muted">Chọn hết những gì đúng với món này — ' + esc(bot()) + ' dựa vào đây để hỏi A/B.</span>' +
+      attrGroups().map(function (g) {
+        return '<div class="attr-group"><span class="group-label">' + esc(g.label) + '</span><div class="chips">' + g.attrs.map(function (a) {
+          return '<label class="toggle sm"><input type="checkbox" name="attr" value="' + esc(a.key) + '"' + (d[a.key] === true ? ' checked' : '') + '><span>' + esc(a.label) + '</span></label>';
+        }).join('') + '</div></div>';
+      }).join('') + '</div>' +
       '<div class="field"><label for="d-img">Link ảnh món</label><input class="input" id="d-img" name="image_url" type="url" value="' + v('image_url') + '" placeholder="Không bắt buộc"></div>' +
       '<div class="field"><label for="d-note">Ghi chú</label><textarea class="textarea" id="d-note" name="note">' + v('note') + '</textarea></div>' +
       (isNew ? '' : '<div class="field"><span class="label">Có ở quán</span>' + (shops.length ? '<div class="chips">' + shops.map(function (s) { return '<span class="chip">' + esc(s) + '</span>'; }).join('') + '</div>' : '<span class="small muted">Chưa gán quán nào. Mở quán trong sổ để gán món.</span>') + '</div>') +
@@ -729,6 +826,77 @@
   }
   function vMissing() {
     return '<section class="screen">' + topbar('#/book', null, 'Không tìm thấy') + '<div class="card empty">Mục này không còn trong sổ.</div></section>';
+  }
+
+  // ───────────────────────── Màn: quản lý phân loại ─────────────────────────
+  function vCats() {
+    var c = S.cats;
+    if (S.param === 'restaurant' || S.param === 'dish') c.tab = S.param;
+    var type = c.tab; var list = catList(type); var used = catUsage(type);
+    var tab = function (t, label) {
+      return '<button role="tab" aria-selected="' + (type === t) + '" class="' + (type === t ? 'on' : '') + '" data-act="catTab" data-t="' + t + '">' + label + ' (' + catList(t).length + ')</button>';
+    };
+    var rows = list.map(function (x, i) {
+      var n = used[lower(x.name)] || 0;
+      if (c.edit === x.id) {
+        return '<form class="card cat-row" data-form="catRename" data-id="' + esc(x.id) + '">' +
+          '<label class="sr-only" for="cat-edit">Tên mới</label><input class="input grow" id="cat-edit" name="name" value="' + esc(x.name) + '" required>' +
+          '<button class="btn btn-primary btn-sm" type="submit"' + (c.busy ? ' disabled' : '') + '>Lưu</button>' +
+          '<button class="btn btn-ghost btn-sm" type="button" data-act="catEditCancel">Hủy</button></form>';
+      }
+      var dis = c.busy ? ' disabled' : '';
+      return '<div class="card cat-row"><span class="stack grow" style="gap:2px"><strong>' + esc(x.name) + '</strong>' +
+        '<span class="small muted">' + (n ? n + ' ' + typeWord(type) + ' đang dùng' : 'Chưa dùng') + '</span></span>' +
+        '<button class="icon-btn sm" data-act="catMove" data-id="' + esc(x.id) + '" data-d="-1" aria-label="Đưa “' + esc(x.name) + '” lên"' + (i === 0 ? ' disabled' : dis) + '>' + I.up + '</button>' +
+        '<button class="icon-btn sm" data-act="catMove" data-id="' + esc(x.id) + '" data-d="1" aria-label="Đưa “' + esc(x.name) + '” xuống"' + (i === list.length - 1 ? ' disabled' : dis) + '>' + I.down + '</button>' +
+        '<button class="icon-btn sm" data-act="catEdit" data-id="' + esc(x.id) + '" aria-label="Đổi tên “' + esc(x.name) + '”"' + dis + '>' + I.edit + '</button>' +
+        '<button class="icon-btn sm danger" data-act="catDel" data-id="' + esc(x.id) + '" aria-label="Xóa “' + esc(x.name) + '”"' + dis + '>' + I.trash + '</button></div>';
+    }).join('');
+    return '<section class="screen">' + topbar(c.back || '#/settings', 'Quản lý dữ liệu', 'Phân loại') +
+      '<div class="segmented" role="tablist">' + tab('restaurant', 'Quán') + tab('dish', 'Món') + '</div>' +
+      '<form data-form="catAdd" class="row"><label class="sr-only" for="cat-new">Tên phân loại mới</label>' +
+      '<input class="input grow" id="cat-new" name="name" placeholder="Thêm phân loại ' + typeWord(type) + '…" required>' +
+      '<button class="btn btn-primary" type="submit"' + (c.busy ? ' disabled' : '') + '>' + I.plus + 'Thêm</button></form>' +
+      '<span class="small muted">Thứ tự ở đây là thứ tự hiện trong ô chọn phân loại và bộ lọc Sổ quán.</span>' +
+      '<div class="list">' + (rows || '<div class="card empty">Chưa có phân loại nào. Khi danh sách trống, ' + typeWord(type) + ' nhập phân loại gì cũng được.</div>') + '</div>' +
+      '</section>';
+  }
+  function catById(id) { return (S.data.categories || []).filter(function (x) { return x.id === id; })[0]; }
+  /** Chạy 1 thao tác phân loại: khóa nút, gọi API, tải lại bootstrap, báo kết quả. */
+  function catOp(run, done) {
+    var c = S.cats;
+    if (c.busy) return;
+    c.busy = true; render();
+    Promise.resolve().then(run).then(function (res) {
+      return refreshData().then(function () { return res; });
+    }).then(function (res) {
+      c.busy = false; c.edit = null;
+      if (S.route === 'cats') render();
+      if (done) toast(done(res));
+    }).catch(function (e) {
+      c.busy = false;
+      if (S.route === 'cats') render();
+      toast(e.message, true);
+    });
+  }
+  function closeModal() { var m = $('.modal'); if (m) m.remove(); }
+  function openReassign(x, n) {
+    closeModal();
+    var others = catList(x.type).filter(function (o) { return o.id !== x.id; });
+    var el = document.createElement('div');
+    el.className = 'modal';
+    el.innerHTML = '<div class="sheet card stack" role="dialog" aria-modal="true" aria-labelledby="mdl-t">' +
+      '<h2 class="h2" id="mdl-t">Xóa “' + esc(x.name) + '”</h2>' +
+      '<span class="small">Đang có ' + n + ' ' + typeWord(x.type) + ' dùng phân loại này. Chọn phân loại để chuyển chúng sang trước khi xóa.</span>' +
+      (others.length
+        ? '<label class="sr-only" for="mdl-to">Chuyển sang</label><select class="select" id="mdl-to">' +
+          others.map(function (o) { return '<option value="' + esc(o.name) + '">' + esc(o.name) + '</option>'; }).join('') + '</select>' +
+          '<div class="btn-row"><button class="btn btn-outline" data-act="modalClose">Hủy</button>' +
+          '<button class="btn btn-primary" data-act="catDelConfirm" data-id="' + esc(x.id) + '">Chuyển &amp; xóa</button></div>'
+        : '<span class="small muted">Chưa có phân loại nào khác để chuyển sang. Thêm một phân loại mới trước nha.</span>' +
+          '<button class="btn btn-outline" data-act="modalClose">Đóng</button>') + '</div>';
+    document.body.appendChild(el);
+    var f = el.querySelector('select, button'); if (f) f.focus();
   }
 
   // ───────────────────────── Màn: thống kê ─────────────────────────
@@ -792,6 +960,9 @@
         '<form data-form="token" class="stack"><label class="small" for="tk2" style="font-weight:600">Đổi mã truy cập</label>' +
         '<input class="input" id="tk2" name="token" autocomplete="off" autocapitalize="off" placeholder="Mã mới"><button class="btn btn-outline" type="submit">Lưu mã</button></form>') +
       '<button class="btn btn-outline" data-act="reload">Tải lại dữ liệu</button></div>' +
+      '<div class="card stack"><h2 class="h2">Quản lý dữ liệu</h2>' +
+      '<span class="small muted">Danh sách phân loại cố định cho quán và món: thêm, đổi tên, sắp xếp, xóa.</span>' +
+      '<a class="btn btn-outline" href="#/cats">' + I.tag + 'Phân loại quán &amp; món</a></div>' +
       (c.birthday_message ? '<div class="card stack"><h2 class="h2">Lời chúc</h2><button class="btn btn-outline" data-act="showSplash">Xem lại lời chúc</button></div>' : '') +
       '<div class="card stack"><h2 class="h2">Cài app lên màn hình chính</h2>' +
       '<span class="small"><b>iPhone:</b> mở bằng Safari → nút Chia sẻ → “Thêm vào MH chính”.</span>' +
@@ -820,7 +991,7 @@
   }
 
   // ───────────────────────── Bảng màn hình ─────────────────────────
-  var VIEWS = { home: vHome, ask: vAsk, places: vPlaces, memo: vMemo, memories: vMemories, book: vBook, shop: vShop, dish: vDish, stats: vStats, settings: vSettings };
+  var VIEWS = { home: vHome, ask: vAsk, places: vPlaces, memo: vMemo, memories: vMemories, book: vBook, shop: vShop, dish: vDish, cats: vCats, stats: vStats, settings: vSettings };
   var AFTER = {
     home: function () {
       if (S.home.loaded || S.home.loading) return;
@@ -919,6 +1090,49 @@
       S.home.loaded = false; S.memories = null; S.stats.data = null;
       refreshData().then(function () { toast('Đã đặt lại dữ liệu mẫu'); go('#/home'); });
     },
+    clearScore: function (el) {
+      var form = el.form; var input = form && form.elements[el.dataset.k];
+      if (!input) return;
+      input.dataset.empty = '1'; input.value = 0;
+      var out = input.parentNode.querySelector('output'); if (out) out.textContent = '–';
+      refreshOverall(form);
+    },
+    catTab: function (el) { S.cats.tab = el.dataset.t; S.cats.edit = null; go('#/cats/' + el.dataset.t); },
+    catEdit: function (el) {
+      S.cats.edit = el.dataset.id; render();
+      var i = $('#cat-edit'); if (i) { i.focus(); i.select(); }
+    },
+    catEditCancel: function () { S.cats.edit = null; render(); },
+    catMove: function (el) {
+      var x = catById(el.dataset.id); if (!x) return;
+      var list = catList(x.type); var i = list.indexOf(x); var j = i + Number(el.dataset.d);
+      if (j < 0 || j >= list.length) return;
+      list.splice(i, 1); list.splice(j, 0, x);
+      // Đánh lại 1..n và chỉ gửi những phân loại có sort_order đổi (thường là 2).
+      var changes = list.map(function (c, k) { return { c: c, order: k + 1 }; }).filter(function (o) { return Number(o.c.sort_order) !== o.order; });
+      catOp(function () {
+        return changes.reduce(function (p, o) {
+          return p.then(function () { return api('update', { table: 'categories', id: o.c.id, data: { sort_order: o.order } }); });
+        }, Promise.resolve());
+      });
+    },
+    catDel: function (el) {
+      var x = catById(el.dataset.id); if (!x) return;
+      var n = catUsage(x.type)[lower(x.name)] || 0;
+      if (n) { openReassign(x, n); return; }
+      if (!confirm('Xóa phân loại “' + x.name + '”?')) return;
+      catOp(function () { return api('remove', { table: 'categories', id: x.id }); }, function () { return 'Đã xóa ' + x.name; });
+    },
+    catDelConfirm: function (el) {
+      var x = catById(el.dataset.id); var sel = $('#mdl-to');
+      if (!x || !sel) return;
+      var to = sel.value;
+      closeModal();
+      catOp(function () { return api('remove', { table: 'categories', id: x.id, reassign_to: to }); }, function (r) {
+        return 'Đã xóa ' + x.name + (r && r.moved ? ', chuyển ' + r.moved + ' ' + typeWord(x.type) + ' sang “' + r.moved_to + '”' : '');
+      });
+    },
+    modalClose: closeModal,
     showSplash: function () { showSplash(true); },
     closeSplash: function (el) { var o = el.closest('.overlay'); if (o) o.remove(); }
   };
@@ -936,6 +1150,22 @@
     memo: saveMemo,
     shop: saveShop,
     dish: saveDish,
+    catAdd: function (form) {
+      var name = String(new FormData(form).get('name') || '').trim();
+      if (!name) return;
+      var type = S.cats.tab;
+      catOp(function () { return api('create', { table: 'categories', data: { type: type, name: name } }); }, function (r) { return 'Đã thêm ' + r.name; });
+    },
+    catRename: function (form) {
+      var x = catById(form.dataset.id); if (!x) return;
+      var name = String(new FormData(form).get('name') || '').trim();
+      if (!name || name === x.name) { S.cats.edit = null; render(); return; }
+      var n = catUsage(x.type)[lower(x.name)] || 0;
+      if (n && !confirm('Đổi “' + x.name + '” thành “' + name + '”?\n' + n + ' ' + typeWord(x.type) + ' đang dùng phân loại này sẽ được đổi theo.')) return;
+      catOp(function () { return api('update', { table: 'categories', id: x.id, data: { name: name } }); }, function (r) {
+        return 'Đã đổi tên' + (r && r.renamed ? ', ' + r.renamed + ' ' + typeWord(x.type) + ' đổi theo' : '');
+      });
+    },
     token: function (form) {
       var t = String(new FormData(form).get('token') || '').trim();
       if (!t) return;
@@ -976,11 +1206,19 @@
     }
   });
   document.addEventListener('input', function (e) {
+    if (e.target.dataset && e.target.dataset.input === 'score') {
+      var el = e.target; delete el.dataset.empty;
+      var out = el.parentNode.querySelector('output'); if (out) out.textContent = fmtScore(el.value);
+      refreshOverall(el.form);
+      return;
+    }
     if (e.target.dataset && e.target.dataset.input === 'bookq') {
       S.book.q = e.target.value;
       var box = $('#book-list'); if (box) box.innerHTML = bookList();
     }
   });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeModal(); });
+  document.addEventListener('click', function (e) { if (e.target.classList && e.target.classList.contains('modal')) closeModal(); });
   window.addEventListener('hashchange', route);
 
   // ───────────────────────── Khởi động ─────────────────────────
