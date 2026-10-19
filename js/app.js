@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = 'leeming-v6'; // đổi cùng VERSION trong sw.js
+  var APP_VERSION = 'leeming-v7'; // đổi cùng VERSION trong sw.js
   var CFG = window.APP_CONFIG || {};
   var DEMO = !CFG.API_URL;
   var WRITE_ACTIONS = { create: 1, update: 1, remove: 1, linkDishes: 1, saveSession: 1, saveMeal: 1 };
@@ -410,7 +410,7 @@
       '<form data-form="token" class="stack">' +
       '<label class="sr-only" for="tk">Mã truy cập</label>' +
       '<input class="input" id="tk" name="token" autocomplete="off" autocapitalize="off" placeholder="Mã truy cập" required>' +
-      (S.tokenBad ? '<span class="small" style="color:#A3240B">Mã chưa đúng, Cá thử lại nha.</span>' : '') +
+      (S.tokenBad ? '<span class="small" style="color:var(--danger)">Mã chưa đúng, Cá thử lại nha.</span>' : '') +
       '<button class="btn btn-primary btn-block" type="submit">Mở app</button></form></div></section>';
   }
 
