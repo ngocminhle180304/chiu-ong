@@ -1,7 +1,7 @@
 /* Service worker: lưu sẵn giao diện app để mở nhanh và mở được cả khi mạng yếu.
  * Dữ liệu (Google Apps Script) không đi qua đây — luôn lấy mới từ máy chủ.
  * Khi sửa code, tăng VERSION để điện thoại tải bản mới. */
-var VERSION = 'leeming-v3';
+var VERSION = 'leeming-v4';
 var SHELL = [
   './', 'index.html', 'css/app.css', 'js/config.js', 'js/gas-shim.js', 'js/app.js', 'backend/Code.gs',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'
@@ -25,8 +25,10 @@ self.addEventListener('fetch', function (e) {
   var sameOrigin = url.origin === self.location.origin;
   var isFont = /fonts\.(googleapis|gstatic)\.com$/.test(url.hostname);
   if (!sameOrigin && !isFont) return;
+  // File của app luôn hỏi lại máy chủ (cache: 'no-cache'), không lấy bản cũ trong bộ nhớ đệm trình duyệt
+  // — GitHub Pages cho trình duyệt giữ file 10 phút, đủ để điện thoại chạy code cũ sau khi đã cập nhật.
   e.respondWith(
-    fetch(req).then(function (res) {
+    (sameOrigin ? fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }) : fetch(req)).then(function (res) {
       if (res && (res.ok || res.type === 'opaque')) {
         var copy = res.clone();
         caches.open(VERSION).then(function (c) { c.put(req, copy); });
