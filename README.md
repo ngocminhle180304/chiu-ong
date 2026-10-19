@@ -79,7 +79,7 @@ App sẽ có icon riêng và mở toàn màn hình. Lần đầu bấm **Gợi �
 ## 6. Khi sửa code
 
 - Sửa backend: cập nhật **cả** bản trong Apps Script (rồi *Deploy > Manage deployments > New version*) **lẫn** `backend/Code.gs` trên GitHub.
-- Sửa giao diện: đổi `VERSION` trong `sw.js`, `APP_VERSION` trong `js/app.js` và số `?v=` trong `index.html` (ví dụ `leeming-v8` / `?v=8`) để điện thoại tải bản mới ngay. Phiên bản đang chạy hiện ở cuối màn Cài đặt.
+- Sửa giao diện: đổi `VERSION` trong `sw.js`, `APP_VERSION` trong `js/app.js` và số `?v=` trong `index.html` (ví dụ `leeming-v9` / `?v=9`) để điện thoại tải bản mới ngay. Phiên bản đang chạy hiện ở cuối màn Cài đặt.
 - `js/gas-shim.js` chỉ giả lập các dịch vụ của Google (Sheet, Drive, Utilities…). Logic thật (gợi ý, điểm quán, phân loại, migration) nằm hết trong `backend/Code.gs` và được app nạp nguyên file, nên sửa `Code.gs` là chế độ dùng thử cũng chạy theo.
 
 ## 7. Nâng cấp lên V2 (phân loại cố định, 4 điểm quán, thuộc tính món theo nhóm)
