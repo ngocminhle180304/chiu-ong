@@ -93,6 +93,8 @@ Thiếu tiêu chí nào thì chia lại trọng số theo các tiêu chí còn l
 - **Giờ mở cửa**: `07:00`, `22:30`. Quán mở qua đêm ghi `18:00` → `02:00`.
 - **Ngày mở cửa**: để trống nghĩa là mở cả tuần. Ví dụ: `T2-T6`, `T7,CN`, `T2,T4,T6`.
 - **Tọa độ**: mở Google Maps, nhấn giữ vào quán, copy hai con số hiện ra rồi điền vào `lat` và `lng`.
+  - Sheet để ngôn ngữ **Tiếng Việt** coi dấu chấm là dấu phân cách hàng nghìn, nên gõ `21.028` sẽ thành số `21028` và khoảng cách tính ra hàng nghìn km. Cách tránh: thêm dấu `'` phía trước (`'21.028`), hoặc nhập qua app, hoặc đổi *File > Settings > Locale* sang *United States*.
+  - Backend tự nhận ra và sửa khi đọc các lỗi hay gặp: số bị nhân 1000, lat/lng đảo chỗ, dấu phẩy thập phân, dán cả cặp "lat, lng" vào một ô. Muốn sửa luôn trong Sheet thì chọn **Leeming > Kiểm tra & sửa tọa độ quán**: menu này ghi lại tọa độ đúng và liệt kê các quán không tự sửa được để bạn điền lại tay.
 - **Luật câu hỏi**: `thuoc_tinh=TRUE` hoặc `FALSE`, nhiều điều kiện thì nối bằng `;`. Ví dụ: `nuoc=TRUE;nong=TRUE`, `nong=TRUE` / `lanh=TRUE`, `do_viet=TRUE` / `do_viet=FALSE`.
 - **Phân loại**: thêm, đổi tên, xóa nên làm trong app (Cài đặt > Phân loại quán & món). Làm vậy thì đổi tên sẽ tự đổi theo ở mọi quán/món. Nếu sửa tay trên sheet Categories, nhớ sửa luôn cột `category` của quán/món đang dùng.
 

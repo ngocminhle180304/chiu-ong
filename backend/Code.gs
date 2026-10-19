@@ -273,6 +273,7 @@ function readAll_(table, includeDeleted) {
     .map((r) => {
       const o = {};
       headers.forEach((h, i) => { if (h) o[h] = fromCell_(h, r[i], bools, def.num); });
+      if (table === 'restaurants') { const c = fixLatLng_(o.lat, o.lng); o.lat = c.lat; o.lng = c.lng; }
       return o;
     })
     .filter((o) => includeDeleted || !(def.soft && o.deleted === true));
@@ -371,7 +372,7 @@ function createRecord_(table, data) {
   data = Object.assign({}, data);
   if (table === 'categories') return createCategory_(data);
   if (table === 'restaurants' || table === 'dishes') data.category = checkCategory_(table, data.category);
-  if (table === 'restaurants') { checkScores_(data); data.rating = calcRating_(data); }
+  if (table === 'restaurants') { checkScores_(data); checkLatLng_(data); data.rating = calcRating_(data); }
   return insert_(table, data);
 }
 
@@ -383,6 +384,7 @@ function updateRecord_(table, id, data) {
   }
   if (table === 'restaurants') {
     checkScores_(data);
+    checkLatLng_(data);
     const current = findById_('restaurants', id);
     if (!current) throw new Error('Không tìm thấy bản ghi ' + id);
     // Ghép tiêu chí mới với giá trị đang lưu rồi tính lại; rating không cho nhập tay.
@@ -394,6 +396,98 @@ function updateRecord_(table, id, data) {
 function removeRecord_(table, id, p) {
   if (table === 'categories') return removeCategory_(id, p && p.reassign_to);
   return remove_(table, id);
+}
+
+// ───────────── TỌA ĐỘ ─────────────
+// Sheet để ngôn ngữ Tiếng Việt coi dấu chấm là dấu phân cách hàng nghìn: gõ tay "21.028" sẽ thành số 21028,
+// làm khoảng cách tính ra hàng nghìn km. Các hàm dưới tự nhận ra và sửa những lỗi hay gặp.
+
+/** Một giá trị tọa độ -> số (hoặc null). Nhận cả dấu phẩy thập phân "21,0285". */
+function coordNum_(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') return isFinite(v) ? v : null;
+  let s = String(v).trim().replace(/^'/, '').replace(/\s/g, '');
+  if (/^-?\d+,\d+$/.test(s)) s = s.replace(',', '.');
+  const n = Number(s);
+  return s !== '' && isFinite(n) ? n : null;
+}
+
+/** Số bị nhân 1000 (mỗi lần Sheet nuốt 1 dấu chấm) → chia lại cho tới khi nằm trong giới hạn. */
+function unscaleCoord_(n, limit) {
+  if (n == null) return null;
+  if (Math.abs(n) <= limit) return n;
+  let x = n;
+  while (Math.abs(x) > limit && Math.abs(x) >= 1000) x = x / 1000;
+  return Math.abs(x) <= limit ? Math.round(x * 1e7) / 1e7 : null;
+}
+
+/** Chuẩn hóa cặp lat/lng: tách "lat, lng" dán chung 1 ô, sửa số bị nhân 1000, đổi chỗ lat/lng bị đảo.
+ *  Trả {lat, lng} — null cả hai nếu không cứu được. */
+function fixLatLng_(lat, lng) {
+  let a = lat; let b = lng;
+  const pair = String(a == null ? '' : a).match(/^\s*'?(-?\d+(?:[.,]\d+)?)\s*[,;\s]\s*(-?\d+(?:[.,]\d+)?)\s*$/);
+  if (pair && (b === null || b === undefined || b === '')) { a = pair[1].replace(',', '.'); b = pair[2].replace(',', '.'); }
+  let x = coordNum_(a); let y = coordNum_(b);
+  if (x == null || y == null) return { lat: null, lng: null };
+  // Đảo chỗ: lat ngoài [-90, 90] nhưng lng lại nằm trong đó (ví dụ 105.85, 21.03).
+  if (Math.abs(x) > 90 && Math.abs(x) <= 180 && Math.abs(y) <= 90) { const t = x; x = y; y = t; }
+  const la = unscaleCoord_(x, 90); const ln = unscaleCoord_(y, 180);
+  if (la == null || ln == null) return { lat: null, lng: null };
+  return { lat: la, lng: ln };
+}
+
+/** Khi thêm/sửa quán qua API: chuẩn hóa tọa độ, nhập sai hẳn thì báo lỗi. */
+function checkLatLng_(data) {
+  const hasLat = data.lat !== undefined && data.lat !== null && data.lat !== '';
+  const hasLng = data.lng !== undefined && data.lng !== null && data.lng !== '';
+  if (!hasLat && !hasLng) return;
+  const c = fixLatLng_(data.lat, data.lng);
+  if (c.lat == null || c.lng == null) throw new Error('Tọa độ chưa đúng. Vĩ độ từ -90 đến 90, kinh độ từ -180 đến 180, ví dụ 21.0285 và 105.8542');
+  data.lat = c.lat; data.lng = c.lng;
+}
+
+/** Menu "Leeming > Kiểm tra & sửa tọa độ quán": ghi lại tọa độ đã chuẩn hóa vào sheet, liệt kê quán đã sửa
+ *  và quán có tọa độ hỏng không tự sửa được. Chạy lại cũng an toàn. */
+function fixCoordinates() {
+  return withLock_(() => {
+    const sh = sheet_('restaurants');
+    const headers = headersOf_(sh);
+    const li = headers.indexOf('lat'); const gi = headers.indexOf('lng'); const ni = headers.indexOf('name');
+    const last = sh.getLastRow();
+    const report = { fixed: [], broken: [] };
+    if (last >= 2 && li >= 0 && gi >= 0) {
+      const range = sh.getRange(2, 1, last - 1, headers.length);
+      const values = range.getValues();
+      values.forEach((row) => {
+        if (row[li] === '' && row[gi] === '') return;
+        const c = fixLatLng_(row[li], row[gi]);
+        const name = String(row[ni] || '');
+        if (c.lat == null) { report.broken.push(name + ' (' + row[li] + ', ' + row[gi] + ')'); return; }
+        if (c.lat !== row[li] || c.lng !== row[gi]) {
+          report.fixed.push(name + ': ' + row[li] + ', ' + row[gi] + ' → ' + c.lat + ', ' + c.lng);
+          row[li] = c.lat; row[gi] = c.lng;
+        }
+      });
+      sh.getRange(2, li + 1, values.length, 1).setValues(values.map((r) => [r[li]]));
+      sh.getRange(2, gi + 1, values.length, 1).setValues(values.map((r) => [r[gi]]));
+    }
+    const cfg = readAll_('config');
+    const rawLat = (cfg.filter((r) => r.key === 'home_lat')[0] || {}).value;
+    const rawLng = (cfg.filter((r) => r.key === 'home_lng')[0] || {}).value;
+    if (rawLat !== undefined && rawLat !== '' && rawLat !== null) {
+      const h = fixLatLng_(rawLat, rawLng);
+      if (h.lat == null) report.broken.push('Nhà (Config: ' + rawLat + ', ' + rawLng + ')');
+      else if (String(h.lat) !== String(rawLat) || String(h.lng) !== String(rawLng)) {
+        setConfigValue_('home_lat', String(h.lat)); setConfigValue_('home_lng', String(h.lng));
+        report.fixed.push('Nhà (Config): ' + rawLat + ', ' + rawLng + ' → ' + h.lat + ', ' + h.lng);
+      }
+    }
+    const msg = 'Đã sửa ' + report.fixed.length + ' tọa độ' + (report.fixed.length ? ':\n' + report.fixed.join('\n') : '.') +
+      (report.broken.length ? '\n\nKhông tự sửa được (điền lại tay):\n' + report.broken.join('\n') : '');
+    console.log(msg);
+    try { SpreadsheetApp.getUi().alert(msg); } catch (e) { /* chạy từ editor */ }
+    return report;
+  });
 }
 
 /** rating = Σ(w·x) / Σw trên các tiêu chí đang có, làm tròn 2 chữ số. Không có tiêu chí nào → null. */
@@ -540,6 +634,9 @@ function syncCategories_() {
 function readConfig_() {
   const out = {};
   readAll_('config').forEach((r) => { if (r.key) out[r.key] = r.value; });
+  // Tọa độ nhà bị Sheet đọc sai (vd 21028) thì sửa lại; thiếu hoặc hỏng hẳn thì để nguyên.
+  const home = fixLatLng_(out.home_lat, out.home_lng);
+  if (home.lat != null) { out.home_lat = String(home.lat); out.home_lng = String(home.lng); }
   return out;
 }
 
@@ -1458,6 +1555,7 @@ function onOpen() {
   SpreadsheetApp.getUi().createMenu('Leeming')
     .addItem('Khởi tạo / bổ sung sheet', 'setupSheets')
     .addItem('Nâng cấp dữ liệu lên V2', 'migrateSchemaV2')
+    .addItem('Kiểm tra & sửa tọa độ quán', 'fixCoordinates')
     .addItem('Xem mã truy cập', 'showToken')
     .addItem('Tạo lại mã truy cập', 'resetToken')
     .addSeparator()

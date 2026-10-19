@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = 'leeming-v5'; // đổi cùng VERSION trong sw.js
+  var APP_VERSION = 'leeming-v6'; // đổi cùng VERSION trong sw.js
   var CFG = window.APP_CONFIG || {};
   var DEMO = !CFG.API_URL;
   var WRITE_ACTIONS = { create: 1, update: 1, remove: 1, linkDishes: 1, saveSession: 1, saveMeal: 1 };
@@ -254,6 +254,13 @@
     (d.dishAttrGroups || []).forEach(function (g) { g.attrs.forEach(function (a) { if (keys.indexOf(a.key) < 0) keys.push(a.key); }); });
     d.dishAttrGroups = dishAttrGroups_(keys);
     d.dishAttrs = d.dishAttrGroups.reduce(function (out, g) { return out.concat(g.attrs); }, []);
+    // Tọa độ bị Sheet đọc sai (vd "21.028" thành 21028, lat/lng đảo chỗ) thì sửa luôn ở đây,
+    // để khoảng cách đúng cả khi Apps Script đang deploy chưa có bản sửa.
+    if (typeof fixLatLng_ === 'function') {
+      (d.restaurants || []).forEach(function (r) { var c = fixLatLng_(r.lat, r.lng); r.lat = c.lat; r.lng = c.lng; });
+      var c = d.config || {}; var h = fixLatLng_(c.home_lat, c.home_lng);
+      if (h.lat != null) { c.home_lat = String(h.lat); c.home_lng = String(h.lng); }
+    }
     return d;
   }
   /** Thống kê khẩu vị: chỉ nhóm Vị + Dạng món, nhãn tiếng Việt theo thuộc tính món. */
