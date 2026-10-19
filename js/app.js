@@ -9,6 +9,7 @@
 (function () {
   'use strict';
 
+  var APP_VERSION = 'leeming-v4'; // đổi cùng VERSION trong sw.js
   var CFG = window.APP_CONFIG || {};
   var DEMO = !CFG.API_URL;
   var WRITE_ACTIONS = { create: 1, update: 1, remove: 1, linkDishes: 1, saveSession: 1, saveMeal: 1 };
@@ -989,7 +990,7 @@
       '<div class="card stack"><h2 class="h2">Cài app lên màn hình chính</h2>' +
       '<span class="small"><b>iPhone:</b> mở bằng Safari → nút Chia sẻ → “Thêm vào MH chính”.</span>' +
       '<span class="small"><b>Android:</b> mở bằng Chrome → menu ⋮ → “Cài đặt ứng dụng” hoặc “Thêm vào màn hình chính”.</span></div>' +
-      '<span class="small muted center">' + esc(appName()) + ' · ' + esc(bot()) + ' làm cho ' + esc(user()) + '</span>' +
+      '<span class="small muted center">' + esc(appName()) + ' · ' + esc(bot()) + ' làm cho ' + esc(user()) + ' · ' + APP_VERSION + '</span>' +
       '</section>';
   }
 

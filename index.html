@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap">
-  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/app.css?v=4">
 </head>
 <body>
   <main id="app" aria-live="polite">
@@ -27,8 +27,9 @@
   </main>
   <div id="toast" class="toast" role="status" hidden></div>
   <noscript>App cần bật JavaScript để chạy.</noscript>
-  <script src="js/config.js"></script>
-  <script src="js/gas-shim.js"></script>
-  <script src="js/app.js"></script>
+  <!-- ?v=… đổi cùng VERSION trong sw.js để trình duyệt tải bản mới -->
+  <script src="js/config.js?v=4"></script>
+  <script src="js/gas-shim.js?v=4"></script>
+  <script src="js/app.js?v=4"></script>
 </body>
 </html>
