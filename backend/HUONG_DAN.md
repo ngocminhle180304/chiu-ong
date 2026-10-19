@@ -39,6 +39,13 @@ Sheet đang chạy bản cũ (chưa có sheet **Categories**, quán còn ô `rat
 6. **Deploy > Manage deployments > Edit > Version: New version > Deploy**.
 7. Cập nhật frontend (GitHub) lên bản mới cùng lúc, vì frontend V2 cần các trường mới trong `bootstrap`.
 
+### Cập nhật bản "Đánh giá theo bữa" (4 điểm quán mỗi bữa + món đã thử)
+
+1. Dán toàn bộ `Code.gs` mới vào Apps Script, bấm **Save**. Bản trong Apps Script phải **giống hệt** `backend/Code.gs` trên GitHub.
+2. Chạy lại `setupSheets`. Hàm này tạo sheet **MealDishes** và thêm 4 cột điểm vào **Meals**, dữ liệu cũ giữ nguyên.
+3. **Deploy > Manage deployments > Edit > Version: New version > Deploy**.
+4. (Tùy chọn) **Leeming > Chạy thử API**. Log có dòng "saveMeal mới…": hàm lưu thử một bữa có 1 món có sẵn và 1 món mới, in điểm quán/món, rồi **tự xóa sạch** dữ liệu thử.
+
 ### Cập nhật bản "Gợi ý theo ngữ cảnh" (thời tiết · tâm trạng · dịp · vị trí)
 
 Sheet đang dùng thì làm theo thứ tự (không mất dữ liệu cũ):
@@ -65,7 +72,8 @@ Sheet đang dùng thì làm theo thứ tự (không mất dữ liệu cũ):
 | **RestaurantDishes** | Quán nào bán món nào, giá và điểm riêng của món tại quán đó | |
 | **Questions** | Câu hỏi A/B và luật lọc món | Tắt câu hỏi bằng cách bỏ tick `active` |
 | **Sessions** | Mỗi lần hỏi: các câu trả lời, các món bị "Hông chịu", kết quả | Dùng cho thống kê |
-| **Meals** | Kỷ niệm: ngày, quán, món, sao, khẩu vị, cảm nhận, ảnh | |
+| **Meals** | Kỷ niệm: ngày, quán, món chính, khẩu vị, cảm nhận, ảnh; 4 điểm quán **trong bữa đó** (`quality`, `price_score`, `space`, `service`) và `rating` = trung bình cộng 4 điểm | Bữa cũ chỉ có `rating` (sao) vẫn dùng bình thường |
+| **MealDishes** | Món đã thử trong từng bữa: `meal_id`, `dish_id`, `dish_name`, `rating` (1–5), `note` | Tạo khi chạy `setupSheets` |
 | **ContextRules** | Luật ngữ cảnh: thời tiết, buổi trong ngày, tâm trạng, dịp đặc biệt (xem mục 3) | Chỉ sửa trong Sheet. Tắt luật bằng cách bỏ tick `active` |
 | **Config** | `bot_name`, `user_name`, `home_lat`/`home_lng`, `birthday_message`, các khóa ngữ cảnh (xem mục 3)… | |
 
@@ -114,7 +122,17 @@ Ba quán mẫu có tiền tố `[Mẫu]`, nhớ thay bằng quán thật của h
 - Chỉ lấy quán bán món đó và **đang mở** (theo giờ Việt Nam, có hỗ trợ quán mở qua đêm).
 - Tính khoảng cách từ vị trí điện thoại. Nếu không lấy được vị trí thì dùng `home_lat`/`home_lng`.
 - Gắn nhãn `is_best` (điểm cao nhất) và `is_nearest` (gần nhất).
-- Điểm "Ngon nhất" lấy theo thứ tự ưu tiên: điểm món tại quán → điểm trung bình các bữa đã ăn → `rating` (điểm chung từ 4 tiêu chí).
+- Điểm "Ngon nhất" lấy theo thứ tự ưu tiên: điểm món tại quán (`dish_rating`) → điểm trung bình các bữa đã ăn → `rating` (điểm chung từ 4 tiêu chí).
+
+### Điểm quán và điểm món từ các bữa đã ăn
+
+- Mỗi lần lưu kỷ niệm, Cá chấm quán theo 4 tiêu chí **cho riêng bữa đó**. `rating` của bữa = trung bình cộng các tiêu chí có điểm.
+- **Điểm quán** (`score` trong `bootstrap`) = trung bình `rating` các bữa đã ăn ở quán. Kèm `meal_avg` là trung bình từng tiêu chí. Quán chưa có bữa nào thì dùng `rating` tính từ điểm nhập tay khi thêm quán.
+- **Món đã thử**: mỗi món trong bữa có điểm 1–5 và ghi chú, lưu ở sheet **MealDishes**. Món chưa gán cho quán thì tự thêm vào **RestaurantDishes** (kèm giá nếu có nhập).
+- Sau mỗi bữa:
+  - `dish_rating` của món tại quán (RestaurantDishes) = trung bình điểm món đó qua các bữa ở quán này.
+  - `avg_rating` của món = trung bình điểm trong MealDishes. Bữa cũ chưa có MealDishes thì lấy điểm của bữa cho món chính.
+  - `times_eaten` đếm mỗi bữa một lần cho mỗi món (món chính và các món đã thử).
 
 ### Gợi ý theo ngữ cảnh
 
@@ -181,14 +199,14 @@ Các action chỉ đọc (đánh dấu ✓ ở cột GET) gọi được bằng 
 | `suggestDish` | ✓ | `{answers:[{question_id, choice:'A'\|'B'}], rejected:[dish_id], context?}` | `{dish, candidates, relaxed, exhausted, reasons, context}` |
 | `suggestRestaurants` | ✓ | `{dish_id, lat?, lng?, context?}` | `{dish, open:[…is_best, is_nearest, distance_km, maps_link, out_of_radius?, match_score?], closed, location_source, radius_km}` |
 | `suggestQuick` | ✓ | `{context, rejected?, lat?, lng?, radius_km?, now?, dish_id?}` | `{dish, restaurants:{open, closed, location_source}, reasons, context:{keys, labels, time_bucket…}, alternatives (≤ 2 món), exhausted}` |
-| `getMeals` | ✓ | `{from?, to?, limit?}` | Danh sách bữa ăn, mới nhất trước |
+| `getMeals` | ✓ | `{from?, to?, limit?}` | Danh sách bữa ăn, mới nhất trước, mỗi bữa kèm `dishes` (món đã thử) |
 | `getStats` | ✓ | `{month?:'2026-10', tasteDays?:14}` | `totalMeals`, `newPlaces`, `avgRejects`, `topDishes`, `tasteProfile`, `feltTastes`, `byWeekday`, `photos`, `availableMonths`, `contextInsights` |
 | `create` | | `{table, data}` | Bản ghi mới |
 | `update` | | `{table, id, data}` | Bản ghi sau khi sửa (categories: kèm `renamed`) |
 | `remove` | | `{table, id, reassign_to?}` | Xóa (quán, món, bữa ăn là xóa mềm). Categories: `{moved, moved_to}` |
 | `linkDishes` | | `{restaurant_id, dishes:[{dish_id, price, dish_rating}]}` | Gán lại toàn bộ món của quán |
 | `saveSession` | | `{session:{id?, answers, rejected, final_dish_id, outcome, context?}}` | Tạo mới hoặc cập nhật phiên (`context` lưu dạng JSON, không lưu tọa độ) |
-| `saveMeal` | | `{meal:{…}, photo?:{base64, mimeType}, newRestaurant?:{…}, context?}` | Bữa ăn đã lưu (tự tải ảnh lên Drive, ghi `context_tags`, `weather_temp`) |
+| `saveMeal` | | `{meal:{…, quality?, price_score?, space?, service?}, dishes?:[…], photo?:{base64, mimeType}, newRestaurant?:{…}, context?}` | Bữa ăn đã lưu, kèm `dishes` (tự tải ảnh lên Drive, ghi `context_tags`, `weather_temp`) |
 
 - `table` của create/update/remove nhận: `restaurants`, `dishes`, `restaurantDishes`, `questions`, `meals`, `categories`.
 - Quán/món: `category` phải có trong sheet Categories cùng `type`, nếu không sẽ báo lỗi (danh sách trống thì bỏ qua kiểm tra). Quán: không nhận `rating` gửi lên, backend tự tính; điểm tiêu chí ngoài 0–5 bị từ chối.
@@ -198,6 +216,12 @@ Các action chỉ đọc (đánh dấu ✓ ở cột GET) gọi được bằng 
   - `remove {id, reassign_to?}`: còn quán/món đang dùng thì bắt buộc có `reassign_to` (tên phân loại khác cùng `type`), không có sẽ báo lỗi kèm số lượng đang dùng.
 - `outcome` của phiên nhận: `di_luon`, `tu_tim`, `bo_do`.
 - **`context`** (tùy chọn, mọi action gợi ý): `{mode:'quick'|'ab', weather:{temp, apparent, humidity, precip, rain_prob, weather_code}, weather_override?:'rain'|'cool'|'cold'|'hot'|'hot_humid'|'none', moods:[key], occasions:[key], occasions_off:[key], lat?, lng?, radius_km?}`. `radius_km`: bỏ trống là dùng `default_radius_km`, `null` là không giới hạn. Không truyền `context` thì gợi ý chạy y như cũ.
+- **`saveMeal`** xử lý trọn gói trong một lần gọi (một lock):
+  - `dishes: [{dish_id?, newDish?:{name, category, ...thuộc tính}, rating?, note?, price?}]`: có `dish_id` là món có sẵn, có `newDish` là món mới (tạo trong sổ món, phân loại phải có trong Categories).
+  - Kiểm tra hết món và điểm trước khi ghi. Có lỗi thì không lưu gì cả.
+  - Thứ tự xử lý: tạo quán mới (nếu có) → tạo món mới → gán món vào quán → lưu bữa → lưu MealDishes → tính lại `dish_rating`.
+  - Quán mới tạo từ bữa ăn lấy luôn 4 điểm của bữa làm điểm ban đầu.
+  - Không có `dishes` và không có 4 điểm thì chạy như cũ (`rating` gửi lên được giữ nguyên).
 - `saveMeal` lấy `context_tags` theo thứ tự: `meal.context_tags` → `context` gửi kèm (bản thô thì backend tự suy ra) → `context` của phiên `session_id`.
 
 **Luồng chuẩn của frontend:**
