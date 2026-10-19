@@ -1,12 +1,13 @@
 # Chìu ông hông bíc ăn gì
 
-Web app chọn món cho Cá: Leeming hỏi vài câu A/B, gợi ý món, tìm quán đang mở gần nhất, lưu kỷ niệm kèm ảnh và thống kê khẩu vị theo tháng. App cài được lên màn hình điện thoại như một app thật.
+Web app chọn món cho Cá: Leeming gợi ý nhanh theo thời tiết, giờ, tâm trạng và dịp đặc biệt (hoặc hỏi vài câu A/B), gợi ý món, tìm quán đang mở gần nhất, lưu kỷ niệm kèm ảnh và thống kê khẩu vị theo tháng. App cài được lên màn hình điện thoại như một app thật.
 
 ```
 index.html             Trang chính
 css/app.css            Giao diện
 js/config.js           ← dán Web app URL của Apps Script vào đây
 js/app.js              Các màn hình
+js/context.js          Vị trí, thời tiết (Open-Meteo), quán quanh đây (OpenStreetMap) và lựa chọn tâm trạng/dịp
 js/gas-shim.js         Giả lập Apps Script trong trình duyệt (dùng chung logic gợi ý với backend)
 backend/Code.gs        Backend — bản này phải GIỐNG HỆT bản dán trong Apps Script
 backend/HUONG_DAN.md   Hướng dẫn cài backend + tài liệu API
@@ -57,12 +58,14 @@ Mở link này lên là thấy app ở chế độ dùng thử.
 - **iPhone**: mở link bằng **Safari**, bấm nút Chia sẻ rồi chọn **Thêm vào MH chính**.
 - **Android**: mở bằng **Chrome**, bấm menu ⋮ rồi chọn **Cài đặt ứng dụng** (hoặc *Thêm vào màn hình chính*).
 
-App sẽ có icon riêng và mở toàn màn hình. Lần đầu bấm **Đi luôn**, điện thoại sẽ hỏi quyền vị trí. Cá cho phép thì app mới tìm được quán gần nhất.
+App sẽ có icon riêng và mở toàn màn hình. Lần đầu bấm **Gợi ý nhanh ⚡**, chip 📍 vị trí hoặc **Đi luôn**, điện thoại sẽ hỏi quyền vị trí. Cá cho phép thì app mới tìm được quán gần nhất, xem được thời tiết chỗ Cá đang đứng và dò quán mới quanh đây. Không cho phép thì app dùng vị trí nhà trong Config.
 
 ## 5. Chuẩn bị quà
 
 - **Lời chúc**: điền vào ô `birthday_message` trong sheet **Config**. Muốn xuống dòng thì bấm Ctrl+Enter trong ô. Lời chúc hiện **một lần** khi Cá mở app, sau đó xem lại được trong Cài đặt.
-- **Vị trí nhà**: điền `home_lat` / `home_lng` trong Config. App dùng vị trí này khi Cá không bật định vị.
+- **Vị trí nhà**: điền `home_lat` / `home_lng` trong Config. App dùng vị trí này khi Cá không bật định vị (để tính khoảng cách và xem thời tiết).
+- **Ngày đặc biệt**: trong sheet **ContextRules**, điền cột `date` của dòng **Sinh nhật Cá** và **Ngày kỷ niệm** theo dạng `MM-DD` (ví dụ `07-15`). Đúng ngày đó app tự bật chip dịp, Leeming chào một câu và ưu tiên món, quán xịn hơn. 20/10, 8/3, Valentine đã có sẵn.
+- **Ngữ cảnh**: sửa luật trong sheet **ContextRules** (xem `backend/HUONG_DAN.md`, mục 3). Muốn ngữ cảnh ảnh hưởng mạnh hay nhẹ hơn thì đổi `context_strength` trong Config.
 - **Dữ liệu**:
   - Xóa 3 quán có chữ `[Mẫu]`.
   - Thêm quán và món thật, ngay trong app (tab Sổ quán) hoặc nhập thẳng vào Sheet.
@@ -76,7 +79,7 @@ App sẽ có icon riêng và mở toàn màn hình. Lần đầu bấm **Đi lu�
 ## 6. Khi sửa code
 
 - Sửa backend: cập nhật **cả** bản trong Apps Script (rồi *Deploy > Manage deployments > New version*) **lẫn** `backend/Code.gs` trên GitHub.
-- Sửa giao diện: đổi `VERSION` trong `sw.js`, `APP_VERSION` trong `js/app.js` và số `?v=` trong `index.html` (ví dụ `leeming-v5` / `?v=5`) để điện thoại tải bản mới ngay. Phiên bản đang chạy hiện ở cuối màn Cài đặt.
+- Sửa giao diện: đổi `VERSION` trong `sw.js`, `APP_VERSION` trong `js/app.js` và số `?v=` trong `index.html` (ví dụ `leeming-v6` / `?v=6`) để điện thoại tải bản mới ngay. Phiên bản đang chạy hiện ở cuối màn Cài đặt.
 - `js/gas-shim.js` chỉ giả lập các dịch vụ của Google (Sheet, Drive, Utilities…). Logic thật (gợi ý, điểm quán, phân loại, migration) nằm hết trong `backend/Code.gs` và được app nạp nguyên file, nên sửa `Code.gs` là chế độ dùng thử cũng chạy theo.
 
 ## 7. Nâng cấp lên V2 (phân loại cố định, 4 điểm quán, thuộc tính món theo nhóm)
@@ -84,3 +87,9 @@ App sẽ có icon riêng và mở toàn màn hình. Lần đầu bấm **Đi lu�
 1. Làm phần backend theo mục *Nâng cấp từ bản cũ lên V2* trong `backend/HUONG_DAN.md`: dán `Code.gs` mới → `setupSheets` → `migrateSchemaV2` → deploy **New version**.
 2. Đưa toàn bộ frontend mới lên GitHub (`index.html`, `css/`, `js/`, `sw.js`, `backend/Code.gs`). `sw.js` đã lên `leeming-v2` nên điện thoại sẽ tải bản mới.
 3. Chế độ dùng thử trên máy nào còn dữ liệu mẫu cũ thì app tự nâng cấp dữ liệu đó khi mở lên.
+
+## 8. Cập nhật bản Gợi ý theo ngữ cảnh
+
+1. Backend: làm theo mục *Cập nhật bản "Gợi ý theo ngữ cảnh"* trong `backend/HUONG_DAN.md`: dán `Code.gs` mới → chạy lại `setupSheets` → điền ngày sinh nhật/kỷ niệm trong **ContextRules** → deploy **New version**.
+2. Frontend: đưa lên GitHub cả file mới `js/context.js`. Phiên bản trong Cài đặt sẽ là `leeming-v5`.
+3. Frontend mới vẫn chạy được với backend cũ (Gợi ý nhanh chạy ngay trên máy), nhưng chưa có chip tâm trạng/dịp và chưa lưu ngữ cảnh cho tới khi backend được cập nhật.

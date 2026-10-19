@@ -47,6 +47,30 @@ const DEFAULT_CATEGORIES = ['Bún/Phở', 'Cơm', 'Mì', 'Bánh', 'Cháo', 'Lẩ
   'Đồ Hàn', 'Đồ Thái', 'Đồ Hoa', 'Ốc', 'Nhậu', 'Buffet', 'Cuốn', 'Tráng miệng', 'Cà phê', 'Cà phê mèo', 'Trà sữa', 'Pub/Bar'];
 const CATEGORY_TYPES = { restaurant: 'restaurants', dish: 'dishes' };
 
+/** Khóa Config mặc định. ensureConfigKeys_() thêm khóa còn thiếu khi chạy setupSheets (không ghi đè giá trị đã có). */
+const CONFIG_DEFAULTS = [
+  ['app_name', 'Chìu ông hông bíc ăn gì', 'Tên app'],
+  ['bot_name', 'Leeming', 'App tự xưng'],
+  ['user_name', 'Cá', 'Cách app gọi người dùng'],
+  ['home_lat', '', 'Vĩ độ nhà — dùng khi không lấy được vị trí điện thoại'],
+  ['home_lng', '', 'Kinh độ nhà'],
+  ['birthday_message', '', 'Lời chúc hiện ở màn hình chào'],
+  ['photo_folder_id', '', 'Tự điền khi lưu ảnh đầu tiên'],
+  ['context_strength', '0.35', 'Mức ngữ cảnh làm nghiêng gợi ý: 0.15 nhẹ, 0.35 vừa, 0.6 mạnh'],
+  ['temp_cold_max', '18', 'Nhiệt độ (°C) ≤ giá trị này là "lạnh"'],
+  ['temp_cool_max', '25', 'Nhiệt độ ≤ giá trị này (và trên mức lạnh) là "mát"'],
+  ['temp_hot_min', '30', 'Nhiệt độ ≥ giá trị này là "nóng"'],
+  ['humid_min', '70', 'Nóng + độ ẩm (%) ≥ giá trị này (hoặc cảm giác ≥ 36°C) là "nóng oi"'],
+  ['rain_prob_min', '60', 'Xác suất mưa (%) trong ~2 giờ tới để tính là "mưa"'],
+  ['default_radius_km', '5', 'Bán kính tìm quán mặc định (km)'],
+  ['learn_enabled', 'TRUE', 'Học dần từ lịch sử ăn theo ngữ cảnh'],
+  ['learn_strength', '0.5', 'Hệ số học'],
+  ['learn_min_meals', '5', 'Số bữa tối thiểu của 1 ngữ cảnh mới bắt đầu học'],
+  ['occasion_window_days', '0', 'Tự bật dịp đặc biệt khi hôm nay lệch ≤ N ngày']
+];
+const CONTEXT_TYPES = ['weather', 'time', 'mood', 'occasion'];
+const WEATHER_KEYS = ['rain', 'cold', 'cool', 'hot', 'hot_humid'];
+
 const TABLES = {
   restaurants: {
     sheet: 'Restaurants', prefix: 'R', soft: true,
@@ -77,15 +101,16 @@ const TABLES = {
   sessions: {
     sheet: 'Sessions', prefix: 'S', soft: false,
     headers: ['id', 'started_at', 'ended_at', 'answers', 'rejected', 'final_dish_id', 'final_restaurant_id', 'outcome',
-      'created_at', 'updated_at'],
+      'context', 'created_at', 'updated_at'],
     num: [],
     bool: []
   },
   meals: {
     sheet: 'Meals', prefix: 'M', soft: true,
     headers: ['id', 'date', 'session_id', 'source', 'restaurant_id', 'restaurant_name', 'dish_id', 'dish_name', 'rating',
-      'tastes', 'feeling', 'photo_url', 'photo_file_id', 'is_new_place', 'created_at', 'updated_at', 'deleted'],
-    num: ['rating'],
+      'tastes', 'feeling', 'photo_url', 'photo_file_id', 'is_new_place', 'context_tags', 'weather_temp',
+      'created_at', 'updated_at', 'deleted'],
+    num: ['rating', 'weather_temp'],
     bool: ['is_new_place', 'deleted']
   },
   categories: {
@@ -93,6 +118,13 @@ const TABLES = {
     headers: ['id', 'type', 'name', 'sort_order', 'created_at', 'updated_at'],
     num: ['sort_order'],
     bool: []
+  },
+  contextRules: {
+    sheet: 'ContextRules', prefix: 'CR', soft: false,
+    headers: ['id', 'type', 'key', 'label', 'emoji', 'rule', 'price_bias', 'novelty_bias', 'message', 'date', 'active',
+      'sort_order', 'created_at', 'updated_at'],
+    num: ['price_bias', 'novelty_bias', 'sort_order'],
+    bool: ['active']
   },
   config: {
     sheet: 'Config', prefix: '', soft: false,
@@ -119,6 +151,7 @@ const ACTIONS = {
   nextQuestion: (p) => nextQuestion_(bootstrap_(), p),
   suggestDish: (p) => suggestDish_(bootstrap_(), p),
   suggestRestaurants: (p) => suggestRestaurants_(bootstrap_(), p),
+  suggestQuick: (p) => suggestQuick_(bootstrap_(), p),
   saveSession: (p) => withLock_(() => saveSession_(p.session || p)),
   saveMeal: (p) => withLock_(() => saveMeal_(p)),
   getMeals: (p) => getMeals_(p),
@@ -126,7 +159,7 @@ const ACTIONS = {
 };
 
 /** Action chỉ đọc — được phép gọi bằng GET (tiện để test trên trình duyệt). */
-const READ_ACTIONS = ['ping', 'bootstrap', 'nextQuestion', 'suggestDish', 'suggestRestaurants', 'getMeals', 'getStats'];
+const READ_ACTIONS = ['ping', 'bootstrap', 'nextQuestion', 'suggestDish', 'suggestRestaurants', 'suggestQuick', 'getMeals', 'getStats'];
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
@@ -261,7 +294,7 @@ function insert_(table, data) {
   const now = nowIso_();
   const row = Object.assign({}, data, { id: newId_(def.prefix), created_at: now, updated_at: now });
   if (def.soft) row.deleted = false;
-  if (table === 'questions' && row.active === undefined) row.active = true;
+  if ((table === 'questions' || table === 'contextRules') && row.active === undefined) row.active = true;
   sh.appendRow(headers.map((h) => toCell_(h, row[h], bools, def.num)));
   applyCheckboxes_(sh, sh.getLastRow(), headers, bools);
   return rowToObj_(table, sh, sh.getLastRow(), headers);
@@ -525,6 +558,13 @@ function setConfigValue_(key, value) {
 
 // ───────────────────────── DỮ LIỆU TỔNG ─────────────────────────
 
+/** Như readAll_ nhưng trả [] khi sheet chưa có (Sheet cũ chưa chạy lại setupSheets). */
+function safeReadAll_(table, includeDeleted) {
+  const def = TABLES[table];
+  if (!SpreadsheetApp.getActive().getSheetByName(def.sheet)) return [];
+  return readAll_(table, includeDeleted);
+}
+
 /** Toàn bộ dữ liệu app cần khi mở lên, kèm số liệu tổng hợp (số lần ăn, điểm trung bình, lần cuối ăn). */
 function bootstrap_() {
   const restaurants = readAll_('restaurants');
@@ -572,8 +612,19 @@ function bootstrap_() {
   const dMap = {}; dishes.forEach((d) => { dMap[d.id] = d; });
   const validLinks = links.filter((l) => rIds[l.restaurant_id] && dMap[l.dish_id]);
   validLinks.forEach((l) => { dMap[l.dish_id].restaurant_count++; });
+  // Mặt bằng giá món: trung bình giá món tại các quán (dùng cho price_bias của ngữ cảnh).
+  const priceSum = {};
+  validLinks.forEach((l) => {
+    if (!isNum_(l.price)) return;
+    const s = priceSum[l.dish_id] || (priceSum[l.dish_id] = { sum: 0, n: 0 });
+    s.sum += Number(l.price); s.n++;
+  });
+  dishes.forEach((d) => { d.price_avg = priceSum[d.id] ? Math.round(priceSum[d.id].sum / priceSum[d.id].n) : null; });
 
   const config = readConfig_();
+  const contextRules = safeReadAll_('contextRules')
+    .filter((r) => r.active !== false && r.key)
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
   return {
     restaurants: restaurants,
     dishes: dishes,
@@ -585,6 +636,8 @@ function bootstrap_() {
       String(a.type).localeCompare(String(b.type)) || (a.sort_order || 0) - (b.sort_order || 0)),
     ratingWeights: RATING_WEIGHTS,
     ratingLabels: RATING_LABELS,
+    contextRules: contextRules,
+    learned: learnedWeights_(contextAttrStats_(meals, dMap, attrs), config),
     config: config,
     serverTime: nowIso_()
   };
@@ -664,11 +717,15 @@ function dayNum_(s) {
 }
 
 /** Trọng số random: món ngon được ưu tiên, món vừa ăn gần đây bị giảm cơ hội. */
-function dishWeight_(d) {
+function dishWeight_(d, ctx) {
   const base = d.avg_rating != null ? d.avg_rating : 3.5;
   const days = daysSince_(d.last_eaten);
   const recency = days == null ? 1 : Math.min(1, Math.max(0.15, days / 14));
-  return Math.max(0.05, base * recency);
+  const w = Math.max(0.05, base * recency);
+  if (!ctx) return w;
+  // Có ngữ cảnh: nhân thêm hệ số ngữ cảnh và hệ số vị trí (xem phần NGỮ CẢNH).
+  const loc = ctx.locFactor[d.id];
+  return w * contextMultiplier_(d, ctx) * (loc == null ? 1 : loc);
 }
 
 function weightedPick_(items, weightFn) {
@@ -678,12 +735,16 @@ function weightedPick_(items, weightFn) {
   return items[items.length - 1];
 }
 
-/** payload: {answers:[{question_id, choice}], rejected:[dish_id], now?} */
+/** payload: {answers:[{question_id, choice}], rejected:[dish_id], now?, context?} */
 function suggestDish_(data, p) {
   const f = filterDishes_(data, p.answers, p.rejected, p.now);
-  if (!f.candidates.length) return { dish: null, candidates: 0, relaxed: f.relaxed, exhausted: true };
-  const dish = weightedPick_(f.candidates, dishWeight_);
-  return { dish: dish, candidates: f.candidates.length, relaxed: f.relaxed, exhausted: false };
+  const ctx = buildContext_(data, p);
+  if (!f.candidates.length) return { dish: null, candidates: 0, relaxed: f.relaxed, exhausted: true, reasons: [], context: ctxSummary_(ctx) };
+  const dish = weightedPick_(f.candidates, (d) => dishWeight_(d, ctx));
+  return {
+    dish: dish, candidates: f.candidates.length, relaxed: f.relaxed, exhausted: false,
+    reasons: contextReasons_(ctx, dish), context: ctxSummary_(ctx)
+  };
 }
 
 /** Chọn câu hỏi tiếp theo chia đôi danh sách món còn lại đều nhất.
@@ -763,11 +824,13 @@ function haversineKm_(lat1, lng1, lat2, lng2) {
 
 function isNum_(v) { return v !== null && v !== '' && !isNaN(Number(v)); }
 
-/** payload: {dish_id, lat?, lng?}. Không có vị trí thì dùng home_lat/home_lng trong Config. */
+/** payload: {dish_id, lat?, lng?, context?}. Không có vị trí thì dùng home_lat/home_lng trong Config.
+ *  Có context: xếp quán theo điểm cân bằng điểm/độ gần và đánh dấu out_of_radius. */
 function suggestRestaurants_(data, p) {
   if (!p.dish_id) throw new Error('Thiếu dish_id');
   const now = p.now ? new Date(p.now) : new Date();
-  let lat = p.lat; let lng = p.lng; let locationSource = 'device';
+  const c = p.context || {};
+  let lat = isNum_(p.lat) ? p.lat : c.lat; let lng = isNum_(p.lng) ? p.lng : c.lng; let locationSource = 'device';
   if (!isNum_(lat) || !isNum_(lng)) { lat = data.config.home_lat; lng = data.config.home_lng; locationSource = 'home'; }
   const hasLoc = isNum_(lat) && isNum_(lng);
   if (!hasLoc) locationSource = 'none';
@@ -794,14 +857,365 @@ function suggestRestaurants_(data, p) {
     r.is_nearest = nearest != null && r.distance_km === nearest;
   });
   open.sort((a, b) => scoreOf(b) - scoreOf(a));
+  const ctx = buildContext_(data, p);
+  if (ctx) rankRestaurants_(open, ctx, scoreOf);
 
   const dish = data.dishes.filter((d) => d.id === p.dish_id)[0] || null;
   return {
     dish: dish,
     open: open,
     closed: list.filter((r) => !r.is_open).map((r) => ({ id: r.id, name: r.name, open_time: r.open_time, close_time: r.close_time })),
-    location_source: locationSource
+    location_source: locationSource,
+    radius_km: ctx ? ctx.loc.radius_km : null
   };
+}
+
+// ───────────────────────── NGỮ CẢNH (thời tiết · giờ · tâm trạng · dịp) ─────────────────────────
+// Ngữ cảnh chỉ làm NGHIÊNG trọng số random, không loại món nào. Luật nằm ở sheet ContextRules.
+// Không truyền `context` thì mọi gợi ý chạy y như cũ.
+
+function clamp_(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+function arr_(v) { return Array.isArray(v) ? v : (v == null || v === '' ? [] : [v]); }
+function uniq_(v) { const seen = {}; return arr_(v).map(String).filter((k) => !seen[k] && (seen[k] = true)); }
+function splitTags_(v) { return arr_(Array.isArray(v) ? v : String(v || '').split(',')).map((s) => String(s).trim()).filter(Boolean); }
+function num0_(v) { return isNum_(v) ? Number(v) : 0; }
+
+function cfgDefault_(key) { const d = CONFIG_DEFAULTS.filter((c) => c[0] === key)[0]; return d ? d[1] : ''; }
+function cfgNum_(config, key) {
+  const v = config ? config[key] : undefined;
+  return isNum_(v) ? Number(v) : num0_(cfgDefault_(key));
+}
+function cfgBool_(config, key) {
+  const v = config ? config[key] : undefined;
+  return toBool_(v === undefined || v === null || v === '' ? cfgDefault_(key) : v);
+}
+
+/** "nuoc=2;nong=-1;cay" -> {nuoc:2, nong:-1, cay:1}. TRUE/FALSE hiểu là 1/-1; giá trị không phải số thì bỏ qua. */
+function parseWeights_(rule) {
+  const out = {};
+  String(rule || '').split(/[;&]/).map((s) => s.trim()).filter(Boolean).forEach((part) => {
+    const kv = part.split('=');
+    const k = kv[0].trim();
+    if (!k) return;
+    let w = 1;
+    if (kv.length > 1) {
+      const raw = kv[1].trim();
+      if (/^(true|false)$/i.test(raw)) w = toBool_(raw) ? 1 : -1;
+      else { w = Number(raw.replace(',', '.')); if (isNaN(w)) return; }
+    }
+    out[k] = (out[k] || 0) + w;
+  });
+  return out;
+}
+
+/** Giờ Việt Nam -> buổi: 5–10 sáng, 10–14 trưa, 14–17 chiều, 17–22 tối, còn lại khuya. */
+function timeBucket_(hour) {
+  if (hour >= 5 && hour < 10) return 'morning';
+  if (hour >= 10 && hour < 14) return 'noon';
+  if (hour >= 14 && hour < 17) return 'afternoon';
+  if (hour >= 17 && hour < 22) return 'evening';
+  return 'late_night';
+}
+
+/** Mã thời tiết WMO có mưa: mưa phùn/mưa (51–67), mưa rào (80–82), dông (95–99). */
+function isRainCode_(c) { c = Number(c); return (c >= 51 && c <= 67) || (c >= 80 && c <= 82) || (c >= 95 && c <= 99); }
+
+/** Số liệu thời tiết thô -> khóa: "rain" (độc lập) + đúng 1 mức nhiệt (khoảng giữa mát và nóng thì không có). */
+function weatherKeys_(raw, config) {
+  if (!raw) return [];
+  const keys = [];
+  if ((isNum_(raw.precip) && Number(raw.precip) > 0)
+    || (isNum_(raw.rain_prob) && Number(raw.rain_prob) >= cfgNum_(config, 'rain_prob_min'))
+    || (isNum_(raw.weather_code) && isRainCode_(raw.weather_code))) keys.push('rain');
+  if (isNum_(raw.temp)) {
+    const t = Number(raw.temp);
+    const feel = isNum_(raw.apparent) ? Number(raw.apparent) : t;
+    if (t <= cfgNum_(config, 'temp_cold_max')) keys.push('cold');
+    else if (t <= cfgNum_(config, 'temp_cool_max')) keys.push('cool');
+    else if (t >= cfgNum_(config, 'temp_hot_min') || feel >= 36) {
+      const humid = isNum_(raw.humidity) && Number(raw.humidity) >= cfgNum_(config, 'humid_min');
+      keys.push(humid || feel >= 36 ? 'hot_humid' : 'hot');
+    }
+  }
+  return keys;
+}
+
+/** date: "MM-DD" (lặp hằng năm) hoặc "yyyy-MM-dd" (1 lần). Khớp khi hôm nay lệch ≤ window ngày. */
+function occasionMatches_(date, today, window) {
+  const d = String(date || '').trim();
+  if (!d) return false;
+  const t = dayNum_(today);
+  let m = d.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return Math.abs(dayNum_(m[1] + '-' + m[2] + '-' + m[3]) - t) <= window;
+  m = d.match(/^(\d{1,2})-(\d{1,2})$/);
+  if (!m) return false;
+  const y = Number(today.slice(0, 4));
+  return [y - 1, y, y + 1].some((yy) => Math.abs(dayNum_(yy + '-' + m[1] + '-' + m[2]) - t) <= window);
+}
+
+/** c: {weather:{temp, apparent, humidity, precip, rain_prob, weather_code}, weather_override?, moods:[key],
+ *      occasions:[key], occasions_off?:[key], mode?:'quick'|'ab', hour?}
+ *  -> các luật ngữ cảnh đang áp dụng. Giờ trong ngày chỉ tính ở Gợi ý nhanh hoặc khi đã có ngữ cảnh khác,
+ *  để luồng A/B không có ngữ cảnh gì vẫn y như cũ. */
+function deriveContext_(data, c, now) {
+  c = c || {};
+  const at = now ? new Date(now) : new Date();
+  const config = data.config || {};
+  const rules = data.contextRules || [];
+  const find = (type, key) => rules.filter((r) => r.type === type && String(r.key) === String(key))[0];
+  const hour = isNum_(c.hour) ? Number(c.hour) : Number(Utilities.formatDate(at, TZ, 'H'));
+  const today = Utilities.formatDate(at, TZ, 'yyyy-MM-dd');
+  const bucket = timeBucket_(hour);
+
+  let wKeys; let wSource = null;
+  if (c.weather_override === 'none') { wKeys = []; wSource = 'manual'; } else if (WEATHER_KEYS.indexOf(c.weather_override) >= 0) {
+    wKeys = [c.weather_override]; wSource = 'manual';
+  } else { wKeys = weatherKeys_(c.weather, config); wSource = c.weather ? 'auto' : null; }
+  const moods = uniq_(c.moods).filter((k) => find('mood', k)).slice(0, 2);
+  const autoOcc = rules.filter((r) => r.type === 'occasion'
+    && occasionMatches_(r.date, today, cfgNum_(config, 'occasion_window_days'))).map((r) => String(r.key));
+  const off = uniq_(c.occasions_off);
+  const occasions = uniq_(autoOcc.filter((k) => off.indexOf(k) < 0).concat(uniq_(c.occasions).filter((k) => find('occasion', k))));
+  const useTime = c.mode === 'quick' || wKeys.length > 0 || moods.length > 0 || occasions.length > 0;
+
+  const applied = wKeys.map((k) => find('weather', k))
+    .concat(useTime ? [find('time', bucket)] : [])
+    .concat(moods.map((k) => find('mood', k)))
+    .concat(occasions.map((k) => find('occasion', k)))
+    .filter(Boolean);
+  return {
+    keys: applied.map((r) => String(r.key)),
+    labels: applied.map((r) => String(r.label || r.key)),
+    rules: applied.map((r) => ({
+      type: r.type, key: String(r.key), label: String(r.label || r.key), emoji: r.emoji || '', message: r.message || '',
+      weights: parseWeights_(r.rule), price_bias: num0_(r.price_bias), novelty_bias: num0_(r.novelty_bias)
+    })),
+    weather: Object.assign({}, c.weather || {}, { keys: wKeys, source: wSource }),
+    moods: moods, occasions: occasions, auto_occasions: autoOcc, time_bucket: bucket, today: today
+  };
+}
+
+/** Vị trí cho ngữ cảnh: điện thoại → nhà (Config) → không có.
+ *  radius_km: không truyền = mặc định Config; null hoặc 0 = không giới hạn. */
+function contextLocation_(data, p, c) {
+  let lat = isNum_(p.lat) ? p.lat : c.lat;
+  let lng = isNum_(p.lng) ? p.lng : c.lng;
+  let source = 'device';
+  if (!isNum_(lat) || !isNum_(lng)) { lat = data.config.home_lat; lng = data.config.home_lng; source = 'home'; }
+  let radius = p.radius_km !== undefined ? p.radius_km : c.radius_km;
+  radius = radius === undefined ? cfgNum_(data.config, 'default_radius_km') : (isNum_(radius) && Number(radius) > 0 ? Number(radius) : null);
+  if (!isNum_(lat) || !isNum_(lng)) return { lat: null, lng: null, source: 'none', radius_km: radius };
+  return { lat: Number(lat), lng: Number(lng), source: source, radius_km: radius };
+}
+
+/** Vị trí phần trăm của giá món so với các món khác, quy về [-1, 1]. Món chưa có giá = 0. */
+function pricePositions_(dishes) {
+  const list = dishes.filter((d) => isNum_(d.price_avg)).map((d) => Number(d.price_avg)).sort((a, b) => a - b);
+  const out = {};
+  if (list.length < 2) return out;
+  dishes.forEach((d) => {
+    if (!isNum_(d.price_avg)) return;
+    const v = Number(d.price_avg);
+    const below = list.filter((x) => x < v).length;
+    const same = list.filter((x) => x === v).length;
+    out[d.id] = ((below + (same - 1) / 2) / (list.length - 1)) * 2 - 1;
+  });
+  return out;
+}
+
+/** Hệ số vị trí mỗi món, theo quán ĐANG MỞ gần nhất bán món đó:
+ *  trong bán kính 1 − 0.3·(d/R) · ngoài bán kính 0.25 · không rõ khoảng cách 0.8 · không có vị trí hoặc không giới hạn 1.
+ *  Món chỉ có quán đang đóng: 0.5. */
+function locFactors_(data, loc, at) {
+  const out = {};
+  if (!loc || loc.source === 'none') return out;
+  const rMap = {}; data.restaurants.forEach((r) => { rMap[r.id] = r; });
+  const best = {};
+  data.restaurantDishes.forEach((l) => {
+    const r = rMap[l.restaurant_id];
+    if (!r || !isOpenAt_(r, at)) return;
+    const d = isNum_(r.lat) && isNum_(r.lng) ? haversineKm_(loc.lat, loc.lng, Number(r.lat), Number(r.lng)) : null;
+    const cur = best[l.dish_id];
+    if (cur === undefined || (d != null && (cur == null || d < cur))) best[l.dish_id] = d;
+  });
+  data.dishes.forEach((dish) => {
+    if (!Object.prototype.hasOwnProperty.call(best, dish.id)) { out[dish.id] = dish.restaurant_count > 0 ? 0.5 : 1; return; }
+    const d = best[dish.id];
+    if (d == null) out[dish.id] = 0.8;
+    else if (!loc.radius_km) out[dish.id] = 1;
+    else out[dish.id] = d <= loc.radius_km ? 1 - 0.3 * (d / loc.radius_km) : 0.25;
+  });
+  return out;
+}
+
+/** Chuẩn bị ngữ cảnh cho 1 lần gợi ý. Không có p.context (và không phải Gợi ý nhanh) → null: gợi ý y như cũ. */
+function buildContext_(data, p, mode) {
+  if (p._ctx) return p._ctx;
+  if (!p.context && mode !== 'quick') return null;
+  const c = Object.assign({}, p.context || {});
+  if (mode) c.mode = mode;
+  const at = p.now ? new Date(p.now) : (c.now ? new Date(c.now) : new Date());
+  const ctx = deriveContext_(data, c, at);
+  ctx.mode = c.mode || 'ab';
+  ctx.at = at;
+  ctx.loc = contextLocation_(data, p, c);
+  // Luồng A/B chưa có tín hiệu nào (không thời tiết, mood, dịp, GPS) → coi như không có ngữ cảnh, chạy y như cũ.
+  if (ctx.mode !== 'quick' && !ctx.keys.length && ctx.loc.source !== 'device') return null;
+  ctx.strength = cfgNum_(data.config, 'context_strength');
+  ctx.learned = data.learned || {};
+  ctx.pricePos = pricePositions_(data.dishes);
+  ctx.locFactor = locFactors_(data, ctx.loc, at);
+  return ctx;
+}
+
+/** Phần gọn của ngữ cảnh để trả về frontend / lưu vào Sessions. */
+function ctxSummary_(ctx) {
+  if (!ctx) return null;
+  return {
+    mode: ctx.mode, keys: ctx.keys, labels: ctx.labels, time_bucket: ctx.time_bucket, weather: ctx.weather,
+    moods: ctx.moods, occasions: ctx.occasions, auto_occasions: ctx.auto_occasions,
+    location_source: ctx.loc.source, radius_km: ctx.loc.radius_km
+  };
+}
+
+/** Điểm ngữ cảnh của 1 món: Σ trọng số thuộc tính (kẹp mềm ±4) + phần học từ lịch sử + giá + mới lạ. */
+function contextScore_(dish, ctx) {
+  let total = 0;
+  ctx.rules.forEach((r) => Object.keys(r.weights).forEach((a) => { if (toBool_(dish[a])) total += r.weights[a]; }));
+  // Kẹp mềm về (−4, 4): 4·tanh(x/4). Kẹp cứng làm món "mưa + nóng + có nước" và món chỉ "nóng" cùng chạm trần 4,
+  // mất hết khác biệt; kẹp mềm giữ thứ tự mà vẫn chặn trên/dưới.
+  total = 4 * Math.tanh(total / 4);
+  ctx.keys.forEach((k) => {
+    const w = ctx.learned[k];
+    if (w) Object.keys(w).forEach((a) => { if (toBool_(dish[a])) total += w[a]; });
+  });
+  const priceBias = clamp_(ctx.rules.reduce((s, r) => s + r.price_bias, 0), -1, 1);
+  if (priceBias) total += priceBias * (ctx.pricePos[dish.id] || 0);
+  const novelty = ctx.rules.reduce((m, r) => Math.max(m, r.novelty_bias), 0);
+  if (novelty > 0) total += novelty / (1 + (dish.times_eaten || 0));
+  return total;
+}
+
+function contextMultiplier_(dish, ctx) {
+  return clamp_(Math.exp(ctx.strength * contextScore_(dish, ctx)), 0.2, 5);
+}
+
+/** Câu "vì sao": dịp đặc biệt trước, rồi các ngữ cảnh đẩy món này lên nhiều nhất (tối đa 3 câu).
+ *  Luật có trọng số thuộc tính chỉ được nêu khi món khớp ít nhất một nửa phần trọng số dương của luật,
+ *  để không nói "món có nước" cho món khô chỉ vì nó nóng. */
+function contextReasons_(ctx, dish) {
+  if (!ctx || !dish) return [];
+  return ctx.rules.filter((r) => r.message).map((r) => {
+    let s = 0; let pos = 0; let hit = 0;
+    Object.keys(r.weights).forEach((a) => {
+      const w = r.weights[a];
+      if (w > 0) pos += w;
+      if (toBool_(dish[a])) { s += w; if (w > 0) hit += w; }
+    });
+    const fits = pos === 0 || hit >= pos / 2;
+    if (r.price_bias) s += r.price_bias * (ctx.pricePos[dish.id] || 0);
+    if (r.novelty_bias > 0) s += r.novelty_bias / (1 + (dish.times_eaten || 0));
+    return { r: r, s: r.type === 'occasion' ? 100 + s : (fits ? s : 0) };
+  }).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 3).map((x) => x.r.message);
+}
+
+/** Xếp quán theo điểm cân bằng 0.6·điểm + 0.4·độ gần; quán ngoài bán kính xuống cuối (out_of_radius).
+ *  Dịp/tâm trạng có price_bias thì cộng nhẹ cho quán điểm cao/giá cao (hoặc rẻ khi price_bias âm). */
+function rankRestaurants_(list, ctx, scoreOf) {
+  const R = ctx.loc.radius_km;
+  const priceBias = clamp_(ctx.rules.reduce((s, r) => s + r.price_bias, 0), -1, 1);
+  const priceOf = (r) => (isNum_(r.dish_price) ? Number(r.dish_price)
+    : (isNum_(r.price_min) && isNum_(r.price_max) ? (Number(r.price_min) + Number(r.price_max)) / 2
+      : (isNum_(r.price_max) ? Number(r.price_max) : (isNum_(r.price_min) ? Number(r.price_min) : null))));
+  const prices = list.map(priceOf).filter((x) => x != null).sort((a, b) => a - b);
+  list.forEach((r) => {
+    const sc = scoreOf(r);
+    const norm = sc > 0 ? clamp_(sc / 5, 0, 1) : 0.5;
+    let close = 0.5;
+    if (r.distance_km != null) close = R ? clamp_(1 - r.distance_km / R, 0, 1) : 1 / (1 + r.distance_km / 5);
+    let bal = 0.6 * norm + 0.4 * close;
+    const pr = priceOf(r);
+    if (priceBias && pr != null && prices.length > 1) {
+      const pct = prices.filter((x) => x < pr).length / (prices.length - 1);
+      bal += 0.05 * priceBias * (2 * pct - 1);
+    }
+    if (priceBias > 0) bal += 0.1 * norm;
+    r.out_of_radius = !!(R && r.distance_km != null && r.distance_km > R);
+    r.match_score = Math.round(bal * 1000) / 1000;
+  });
+  list.sort((a, b) => (Number(a.out_of_radius) - Number(b.out_of_radius)) || (b.match_score - a.match_score));
+  return list;
+}
+
+function fmtKm_(km) { return km < 1 ? Math.round(km * 1000) + ' m' : String(round1_(km)).replace('.', ',') + ' km'; }
+
+/** Gợi ý nhanh 1 chạm: không hỏi A/B, chọn món theo ngữ cảnh rồi xếp quán luôn.
+ *  payload: {context, rejected:[...], lat?, lng?, radius_km?, now?, dish_id? (chọn sẵn món, vd từ alternatives)} */
+function suggestQuick_(data, p) {
+  const ctx = buildContext_(data, p, 'quick');
+  const pool = filterDishes_(data, [], p.rejected, ctx.at).candidates;
+  const summary = ctxSummary_(ctx);
+  if (!pool.length) return { dish: null, restaurants: null, reasons: [], context: summary, alternatives: [], exhausted: true };
+  const weight = (d) => dishWeight_(d, ctx);
+  let dish = p.dish_id ? data.dishes.filter((d) => d.id === p.dish_id)[0] : null;
+  if (!dish) dish = weightedPick_(pool, weight);
+  const rest = pool.filter((d) => d.id !== dish.id);
+  const alternatives = [];
+  while (alternatives.length < 2 && rest.length) {
+    const a = weightedPick_(rest, weight);
+    alternatives.push(a);
+    rest.splice(rest.indexOf(a), 1);
+  }
+  const c = p.context || {};
+  const restaurants = suggestRestaurants_(data, {
+    dish_id: dish.id, lat: isNum_(p.lat) ? p.lat : c.lat, lng: isNum_(p.lng) ? p.lng : c.lng, now: ctx.at, _ctx: ctx
+  });
+  const reasons = contextReasons_(ctx, dish);
+  const top = restaurants.open[0];
+  if (top && top.distance_km != null) {
+    reasons.push(top.out_of_radius
+      ? 'Quán gần nhất có món này hơi xa (' + fmtKm_(top.distance_km) + '), Cá cân nhắc nha.'
+      : top.name + ' cách có ' + fmtKm_(top.distance_km) + ' thôi, đi liền nè.');
+  }
+  return { dish: dish, restaurants: restaurants, reasons: reasons, context: summary, alternatives: alternatives, exhausted: false };
+}
+
+/** Thống kê theo ngữ cảnh: với mỗi tag, số bữa (có món trong sổ) và số bữa có từng thuộc tính. Khóa '' = mọi bữa. */
+function contextAttrStats_(meals, dMap, attrs) {
+  const st = { '': { n: 0, c: {} } };
+  meals.forEach((m) => {
+    const d = dMap[m.dish_id];
+    if (!d) return;
+    [''].concat(splitTags_(m.context_tags)).forEach((t) => {
+      const s = st[t] || (st[t] = { n: 0, c: {} });
+      s.n++;
+      attrs.forEach((a) => { if (toBool_(d[a])) s.c[a] = (s.c[a] || 0) + 1; });
+    });
+  });
+  return st;
+}
+
+/** {tag: {thuộc tính: hệ số}} = clamp(log2(P(attr|tag) / P(attr)) × learn_strength, ±1.5),
+ *  chỉ cho tag có ≥ learn_min_meals bữa. Làm trơn Laplace để tránh log(0). Không ghi đè luật trong Sheet. */
+function learnedWeights_(st, config) {
+  const out = {};
+  if (!cfgBool_(config, 'learn_enabled')) return out;
+  const all = st[''];
+  if (!all || !all.n) return out;
+  const min = cfgNum_(config, 'learn_min_meals');
+  const k = cfgNum_(config, 'learn_strength');
+  Object.keys(st).forEach((tag) => {
+    if (!tag || st[tag].n < min) return;
+    const w = {};
+    Object.keys(all.c).forEach((a) => {
+      const p = (all.c[a] + 1) / (all.n + 2);
+      const pc = ((st[tag].c[a] || 0) + 1) / (st[tag].n + 2);
+      const v = clamp_(Math.log(pc / p) / Math.LN2 * k, -1.5, 1.5);
+      if (Math.abs(v) >= 0.05) w[a] = Math.round(v * 100) / 100;
+    });
+    out[tag] = w;
+  });
+  return out;
 }
 
 // ───────────────────────── PHIÊN & KỶ NIỆM ─────────────────────────
@@ -810,7 +1224,8 @@ function suggestRestaurants_(data, p) {
  *  outcome: 'di_luon' (chọn quán từ gợi ý) | 'tu_tim' (Để bố tự tìm) | 'bo_do' (thoát giữa chừng) */
 function saveSession_(s) {
   const data = Object.assign({}, s);
-  ['answers', 'rejected'].forEach((k) => { if (data[k] && typeof data[k] !== 'string') data[k] = JSON.stringify(data[k]); });
+  if (data.context && typeof data.context !== 'string') data.context = contextForSave_(data.context);
+  ['answers', 'rejected', 'context'].forEach((k) => { if (data[k] && typeof data[k] !== 'string') data[k] = JSON.stringify(data[k]); });
   if (data.id && findRow_(sheet_('sessions'), data.id) > 0) return update_('sessions', data.id, data);
   delete data.id;
   if (!data.started_at) data.started_at = nowIso_();
@@ -828,6 +1243,19 @@ function saveMeal_(p) {
   const meal = Object.assign({}, p.meal || {});
   if (!meal.date) meal.date = today_();
   if (Array.isArray(meal.tastes)) meal.tastes = meal.tastes.join(', ');
+  // Tag ngữ cảnh: lấy từ meal.context_tags, hoặc từ context gửi kèm, hoặc từ phiên (session_id).
+  if (!splitTags_(meal.context_tags).length) {
+    let ctx = p.context ? contextForSave_(p.context) : null;
+    if (!ctx && meal.session_id) {
+      const ses = safeReadAll_('sessions').filter((x) => x.id === meal.session_id)[0];
+      try { ctx = ses && ses.context ? JSON.parse(ses.context) : null; } catch (e) { ctx = null; }
+    }
+    if (ctx) {
+      meal.context_tags = splitTags_(ctx.keys);
+      if (meal.weather_temp == null && ctx.weather && isNum_(ctx.weather.temp)) meal.weather_temp = Number(ctx.weather.temp);
+    }
+  }
+  if (Array.isArray(meal.context_tags)) meal.context_tags = meal.context_tags.join(', ');
 
   if (p.newRestaurant && p.newRestaurant.name) {
     const r = createRecord_('restaurants', p.newRestaurant);
@@ -864,6 +1292,29 @@ function saveMeal_(p) {
     } catch (e) { /* phiên không tồn tại thì bỏ qua */ }
   }
   return saved;
+}
+
+/** Ngữ cảnh gọn để lưu. Nhận bản đã suy ra (có keys) hoặc bản thô (thời tiết + mood + dịp) thì tự suy ra.
+ *  Không lưu tọa độ. */
+function contextForSave_(c) {
+  if (!c) return null;
+  if (Array.isArray(c.keys)) {
+    return {
+      mode: c.mode || null, keys: c.keys, weather: c.weather || null, moods: c.moods || [], occasions: c.occasions || [],
+      time_bucket: c.time_bucket || null, location_source: c.location_source || null,
+      radius_km: c.radius_km === undefined ? null : c.radius_km
+    };
+  }
+  const data = {
+    config: readConfig_(),
+    contextRules: safeReadAll_('contextRules').filter((r) => r.active !== false && r.key)
+  };
+  const ctx = deriveContext_(data, c, c.now);
+  const loc = isNum_(c.lat) && isNum_(c.lng) ? 'device' : (isNum_(data.config.home_lat) ? 'home' : 'none');
+  return {
+    mode: c.mode || 'ab', keys: ctx.keys, weather: ctx.weather, moods: ctx.moods, occasions: ctx.occasions,
+    time_bucket: ctx.time_bucket, location_source: loc, radius_km: c.radius_km === undefined ? null : c.radius_km
+  };
 }
 
 function photoFolder_() {
@@ -951,6 +1402,25 @@ function getStats_(p) {
   const months = {};
   allMeals.forEach((m) => { if (m.date) months[String(m.date).slice(0, 7)] = true; });
 
+  // "Leeming nhận ra…": mỗi ngữ cảnh đủ bữa → 3 thuộc tính chênh nhiều nhất so với bình thường.
+  const allAttrs = dishAttrs_(headersOf_(sheet_('dishes')));
+  const cst = contextAttrStats_(allMeals, dMap, allAttrs);
+  const minMeals = cfgNum_(readConfig_(), 'learn_min_meals');
+  const ruleMap = {};
+  safeReadAll_('contextRules').forEach((r) => { if (r.key) ruleMap[String(r.key)] = r; });
+  const base = cst[''];
+  const contextInsights = Object.keys(cst).filter((t) => t && cst[t].n >= minMeals).map((t) => {
+    const s = cst[t];
+    const insights = allAttrs.map((a) => ({
+      attr: a, label: ATTR_LABELS[a] || a,
+      percent: Math.round(100 * (s.c[a] || 0) / s.n),
+      baseline: base.n ? Math.round(100 * (base.c[a] || 0) / base.n) : 0
+    })).filter((x) => Math.abs(x.percent - x.baseline) >= 10)
+      .sort((x, y) => Math.abs(y.percent - y.baseline) - Math.abs(x.percent - x.baseline)).slice(0, 3);
+    const r = ruleMap[t] || {};
+    return { key: t, label: r.label || t, emoji: r.emoji || '', type: r.type || null, meals: s.n, insights: insights };
+  }).filter((x) => x.insights.length).sort((a, b) => b.meals - a.meals);
+
   return {
     month: month,
     totalMeals: inMonth.length,
@@ -963,7 +1433,9 @@ function getStats_(p) {
     feltTastes: Object.keys(felt).map((k) => ({ label: k, times: felt[k] })).sort((a, b) => b.times - a.times),
     byWeekday: byWeekday,
     photos: inMonth.filter((m) => m.photo_url).map((m) => ({ id: m.id, date: m.date, url: m.photo_url, dish_name: m.dish_name, restaurant_name: m.restaurant_name })),
-    availableMonths: Object.keys(months).sort().reverse()
+    availableMonths: Object.keys(months).sort().reverse(),
+    contextInsights: contextInsights,
+    contextMinMeals: minMeals
   };
 }
 
@@ -1010,6 +1482,11 @@ function ensureSheets_() {
         sh.getRange(1, sh.getLastColumn() + 1).setValue(h).setFontWeight('bold').setBackground('#FFE1D2');
       });
     }
+    // Cột ngày của dịp đặc biệt để dạng chữ, tránh Sheet tự đổi "10-20" thành ngày của năm nay.
+    if (t === 'contextRules') {
+      const col = headersOf_(sh).indexOf('date') + 1;
+      if (col > 0) sh.getRange(2, col, 1000, 1).setNumberFormat('@');
+    }
   });
   const blank = ss.getSheetByName('Sheet1') || ss.getSheetByName('Trang tính1');
   if (blank && blank.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(blank);
@@ -1019,6 +1496,7 @@ function ensureSheets_() {
 function setupSheets() {
   const ss = SpreadsheetApp.getActive();
   ensureSheets_();
+  ensureConfigKeys_();
   seedSampleData_();
 
   const props = PropertiesService.getScriptProperties();
@@ -1128,6 +1606,55 @@ function migrateRestaurantsV2_() {
   return n;
 }
 
+/** Thêm các khóa Config còn thiếu (giữ nguyên giá trị đã có). */
+function ensureConfigKeys_() {
+  const sh = sheet_('config');
+  const have = {};
+  const last = sh.getLastRow();
+  if (last >= 2) sh.getRange(2, 1, last - 1, 1).getValues().forEach((r) => { have[String(r[0]).trim()] = true; });
+  const missing = CONFIG_DEFAULTS.filter((c) => !have[c[0]]);
+  if (missing.length) {
+    sh.getRange(sh.getLastRow() + 1, 1, missing.length, 3)
+      .setValues(missing.map((r) => r.map((v) => (v === '' ? '' : "'" + v))));
+  }
+  return missing.length;
+}
+
+/** Luật ngữ cảnh mẫu — chủ app tự chỉnh trong sheet ContextRules. */
+function seedContextRules_() {
+  const rows = [
+    // type, key, label, emoji, rule, price_bias, novelty_bias, message, date
+    ['weather', 'rain', 'Trời mưa', '🌧️', 'nuoc=2;nong=2;cay=1;an_no=1', 0, 0, 'Trời mưa rồi, làm bát gì nóng hổi có nước cho ấm bụng nha Cá.', ''],
+    ['weather', 'cold', 'Trời lạnh', '🥶', 'nuoc=2;nong=2;cay=1;beo=1;an_no=1', 0, 0, 'Lạnh thế này phải ăn gì nóng nóng, béo béo mới chịu nổi.', ''],
+    ['weather', 'cool', 'Trời mát', '🌤️', 'nong=1;nuoc=1', 0, 0, 'Trời mát dễ chịu, ăn gì cũng ngon, món ấm ấm càng hợp.', ''],
+    ['weather', 'hot', 'Trời nóng', '☀️', 'nong=-1;chua=1;nuoc=1', 0, 0, 'Nóng quá, Leeming chọn món nhẹ nhàng thanh mát cho Cá.', ''],
+    ['weather', 'hot_humid', 'Nóng oi bức', '🥵', 'nong=-2;lanh=2;chua=2;cay=-1;beo=-1;nuoc=1', 0, 0, 'Trời oi bức, né đồ nóng với đồ béo ra nha Cá.', ''],
+    ['time', 'morning', 'Sáng', '🌅', 'nuoc=1;nong=1', 0, 0, 'Bữa sáng ăn gì có nước ấm ấm là đẹp.', ''],
+    ['time', 'noon', 'Trưa', '🍚', 'an_no=1', 0, 0, 'Trưa rồi, ăn cho no để chiều còn sức.', ''],
+    ['time', 'afternoon', 'Chiều', '🧋', 'an_vat=1', 0, 0, 'Chiều chiều nhâm nhi chút gì là vui.', ''],
+    ['time', 'evening', 'Tối', '🌆', '', 0, 0, '', ''],
+    ['time', 'late_night', 'Khuya', '🌙', 'an_vat=2', 0, 0, 'Khuya rồi, ăn vặt chút thôi nha Cá.', ''],
+    ['mood', 'tired', 'Mệt rã rời', '😮‍💨', 'an_no=2;nong=1;beo=1', 0, 0, 'Cá mệt rồi, ăn gì no bụng nạp năng lượng nha.', ''],
+    ['mood', 'stress', 'Stress', '🤯', 'cay=2;ngot=1', 0, 0, 'Stress thì ăn cay xả hơi, thêm tí ngọt cho vui.', ''],
+    ['mood', 'happy', 'Vui', '😄', 'an_no=1', 1, 0, 'Đang vui thì ăn ngon một bữa cho trọn vẹn!', ''],
+    ['mood', 'sad', 'Buồn', '🥺', 'ngot=2;beo=1;nong=1', 0, 0, 'Buồn thì để đồ ngọt với đồ ấm dỗ Cá nè.', ''],
+    ['mood', 'excited', 'Hứng khởi', '🤩', 'cay=1', 0, 1, 'Đang hứng khởi, thử món mới cho máu nha!', ''],
+    ['mood', 'sick', 'Hơi ốm', '🤒', 'nuoc=2;nong=2;cay=-2;beo=-1', 0, 0, 'Cá hơi ốm, ăn đồ nóng có nước, đừng ăn cay nha.', ''],
+    ['mood', 'crave_new', 'Thèm gì đó lạ', '🧭', '', 0, 1, 'Cá thèm lạ miệng nên Leeming chọn món ít ăn.', ''],
+    ['occasion', 'birthday_ca', 'Sinh nhật Cá', '🎂', 'an_no=1', 1, 0, 'Sinh nhật Cá mà, phải ăn món xịn!', ''],
+    ['occasion', 'anniversary', 'Ngày kỷ niệm', '💞', '', 1, 0, 'Ngày kỷ niệm của hai đứa, đi ăn chỗ ngon nha.', ''],
+    ['occasion', 'womens_day_vn', '20/10', '💐', '', 1, 0, 'Hôm nay 20/10, Cá được chiều nhất nhà!', '10-20'],
+    ['occasion', 'intl_womens_day', '8/3', '🌷', '', 1, 0, 'Mùng 8/3 rồi, Cá chọn gì cũng được hết.', '03-08'],
+    ['occasion', 'valentine', 'Valentine', '💘', '', 1, 0, 'Valentine nè, đi ăn chỗ lãng mạn xíu nha.', '02-14'],
+    ['occasion', 'celebrate', 'Ăn mừng', '🎉', '', 1, 0, 'Ăn mừng thì phải ăn ngon!', '']
+  ];
+  rows.forEach((r, i) => insert_('contextRules', {
+    type: r[0], key: r[1], label: r[2], emoji: r[3], rule: r[4], price_bias: r[5], novelty_bias: r[6],
+    message: r[7], date: r[8], active: true, sort_order: i + 1
+  }));
+  return rows.length;
+}
+
 function generateToken_() {
   return Utilities.getUuid().replace(/-/g, '').slice(0, 16);
 }
@@ -1144,20 +1671,8 @@ function resetToken() {
 }
 
 function seedSampleData_() {
-  if (readAll_('config').length === 0) {
-    const cfg = [
-      ['app_name', 'Chìu ông hông bíc ăn gì', 'Tên app'],
-      ['bot_name', 'Leeming', 'App tự xưng'],
-      ['user_name', 'Cá', 'Cách app gọi người dùng'],
-      ['home_lat', '', 'Vĩ độ nhà — dùng khi không lấy được vị trí điện thoại'],
-      ['home_lng', '', 'Kinh độ nhà'],
-      ['birthday_message', '', 'Lời chúc hiện ở màn hình chào'],
-      ['photo_folder_id', '', 'Tự điền khi lưu ảnh đầu tiên']
-    ];
-    sheet_('config').getRange(2, 1, cfg.length, 3).setValues(cfg.map((r) => r.map((v) => (v === '' ? '' : "'" + v))));
-  }
-
   if (readAll_('categories').length === 0) syncCategories_();
+  if (readAll_('contextRules').length === 0) seedContextRules_();
 
   if (readAll_('questions').length === 0) {
     [
@@ -1252,4 +1767,40 @@ function testApi() {
     }
   }
   console.log('Thống kê tháng này: %s', JSON.stringify(getStats_({})).slice(0, 500));
+
+  // Gợi ý nhanh theo ngữ cảnh: so sánh phân bố món của 3 kịch bản với không có ngữ cảnh.
+  const yr = today_().slice(0, 4);
+  const scenarios = [
+    ['Không ngữ cảnh (A/B)', null],
+    ['Mưa + mệt', { weather: { temp: 24, humidity: 85, precip: 1.2 }, moods: ['tired'], hour: 19 }],
+    ['Nóng oi + khuya', { weather: { temp: 33, humidity: 80 }, hour: 23 }],
+    ['20/10, không mood', { now: yr + '-10-20T12:00:00+07:00' }]
+  ];
+  scenarios.forEach((sc) => {
+    const r = simulateSuggest_(data, sc[1], 500, sc[1] ? sc[1].now : null);
+    console.log('%s → %s', sc[0], r.top.map((x) => x.name + ' ' + x.percent + '%').join(', '));
+    if (sc[1]) {
+      const q = suggestQuick_(data, { context: sc[1], now: sc[1].now });
+      console.log('   gợi ý nhanh: %s · lý do: %s', q.dish ? q.dish.name : '—', q.reasons.join(' | '));
+    }
+  });
+}
+
+/** Chạy chọn món n lần (không hỏi A/B) để xem ngữ cảnh làm nghiêng phân bố thế nào.
+ *  context = null → cơ chế cũ (dishWeight_ không ngữ cảnh). Trả về tỉ lệ từng món + tỉ lệ món có từng thuộc tính. */
+function simulateSuggest_(data, context, n, at) {
+  const now = at || (context && context.now);
+  const ctx = context ? buildContext_(data, { context: context, now: now }, 'quick') : null;
+  const pool = filterDishes_(data, [], [], now).candidates;
+  const count = {}; const attr = {};
+  for (let i = 0; i < n; i++) {
+    const d = weightedPick_(pool, (x) => dishWeight_(x, ctx));
+    count[d.id] = (count[d.id] || 0) + 1;
+    DISH_ATTRS.forEach((a) => { if (toBool_(d[a])) attr[a] = (attr[a] || 0) + 1; });
+  }
+  const name = {}; data.dishes.forEach((d) => { name[d.id] = d.name; });
+  const top = Object.keys(count).map((id) => ({ id: id, name: name[id], percent: Math.round(100 * count[id] / n) }))
+    .sort((x, y) => y.percent - x.percent).slice(0, 5);
+  const attrPct = {}; Object.keys(attr).forEach((a) => { attrPct[a] = Math.round(100 * attr[a] / n); });
+  return { top: top, count: count, attrPercent: attrPct, pool: pool.length };
 }

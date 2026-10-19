@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = 'leeming-v4'; // đổi cùng VERSION trong sw.js
+  var APP_VERSION = 'leeming-v5'; // đổi cùng VERSION trong sw.js
   var CFG = window.APP_CONFIG || {};
   var DEMO = !CFG.API_URL;
   var WRITE_ACTIONS = { create: 1, update: 1, remove: 1, linkDishes: 1, saveSession: 1, saveMeal: 1 };
@@ -25,7 +25,9 @@
     param: null,
     home: { loaded: false, stats: null, last: null },
     ask: null,
+    quick: null,
     pick: null,
+    ctx: { weather: null, weatherState: 'idle', warmed: false },
     memo: null,
     memories: null,
     book: { tab: 'shops', q: '', cat: 'Tất cả' },
@@ -285,19 +287,7 @@
   }
 
   function getPos(fresh) {
-    return new Promise(function (resolve) {
-      if (!navigator.geolocation) return resolve(null);
-      if (!fresh && S.pos && Date.now() - S.pos.t < 5 * 60 * 1000) return resolve(S.pos);
-      var done = false;
-      var timer = setTimeout(function () { if (!done) { done = true; resolve(null); } }, 9000);
-      navigator.geolocation.getCurrentPosition(function (p) {
-        if (done) return; done = true; clearTimeout(timer);
-        S.pos = { lat: p.coords.latitude, lng: p.coords.longitude, t: Date.now() };
-        resolve(S.pos);
-      }, function () {
-        if (done) return; done = true; clearTimeout(timer); resolve(null);
-      }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 300000 });
-    });
+    return Ctx.getLocation(fresh).then(function (p) { if (p) S.pos = p; return p; });
   }
 
   function compressImage(file, maxSide) {
@@ -322,6 +312,8 @@
     if (GasDemo.hasData()) {
       // Dữ liệu dùng thử tạo từ bản cũ: nâng cấp tại chỗ giống như chạy migrateSchemaV2() trên Sheet thật.
       if (!SpreadsheetApp.getActive().getSheetByName('Categories')) { migrateSchemaV2(); GasDemo.save(); }
+      // Bản có ngữ cảnh: chạy lại setupSheets như trên Sheet thật (thêm sheet/cột/khóa còn thiếu, giữ dữ liệu).
+      if (!SpreadsheetApp.getActive().getSheetByName('ContextRules')) { setupSheets(); GasDemo.save(); }
       return;
     }
     setupSheets();
@@ -333,17 +325,19 @@
     var D = function (name) { return d.dishes.filter(function (x) { return x.name === name; })[0]; };
     var ago = function (n) { return Utilities.formatDate(new Date(Date.now() - n * 864e5), 'Asia/Ho_Chi_Minh', 'yyyy-MM-dd'); };
     [
-      [1, 'bún chả', 'Bún chả', 5, ['Ngọt', 'Béo'], 'Chả nướng thơm, nước chấm vừa miệng', 2],
-      [3, 'phở', 'Phở bò', 4, ['Đậm đà'], 'Nước dùng ngọt, quán hơi đông', 0],
-      [5, 'đêm', 'Lẩu thái', 5, ['Cay', 'Chua'], 'Ăn xong toát mồ hôi luôn', 3],
-      [8, 'bún chả', 'Bún chả', 4, ['Ngọt'], '', 1],
-      [12, 'đêm', 'Ốc luộc', 4, ['Cay'], 'Ngồi vỉa hè gió mát', 0],
-      [17, 'phở', 'Bánh cuốn', 3, ['Thanh'], 'Hơi nguội', 2],
-      [21, 'bún chả', 'Cơm tấm', 4, ['Béo', 'Mặn'], '', 1]
+      [1, 'bún chả', 'Bún chả', 5, ['Ngọt', 'Béo'], 'Chả nướng thơm, nước chấm vừa miệng', 2, 'evening, happy'],
+      [2, 'phở', 'Bún riêu', 4, ['Chua'], 'Mưa lạnh ăn bún riêu là chuẩn', 0, 'rain, cool, evening'],
+      [3, 'phở', 'Phở bò', 4, ['Đậm đà'], 'Nước dùng ngọt, quán hơi đông', 0, 'rain, cool, evening'],
+      [5, 'đêm', 'Lẩu thái', 5, ['Cay', 'Chua'], 'Ăn xong toát mồ hôi luôn', 3, 'rain, cool, evening'],
+      [8, 'bún chả', 'Bún chả', 4, ['Ngọt'], '', 1, 'noon'],
+      [10, 'bún chả', 'Bún bò Huế', 5, ['Cay'], '', 1, 'rain, noon'],
+      [12, 'đêm', 'Ốc luộc', 4, ['Cay'], 'Ngồi vỉa hè gió mát', 0, 'rain, late_night'],
+      [17, 'phở', 'Bánh cuốn', 3, ['Thanh'], 'Hơi nguội', 2, 'morning'],
+      [21, 'bún chả', 'Cơm tấm', 4, ['Béo', 'Mặn'], '', 1, 'hot, noon, tired']
     ].forEach(function (m) {
       var rej = d.dishes.slice(0, m[6]).map(function (x) { return x.id; });
       var s = saveSession_({ started_at: ago(m[0]) + 'T19:00:00+07:00', answers: [], rejected: rej });
-      saveMeal_({ meal: { date: ago(m[0]), session_id: s.id, source: 'suggested', restaurant_id: R(m[1]).id, dish_id: D(m[2]).id, rating: m[3], tastes: m[4], feeling: m[5] } });
+      saveMeal_({ meal: { date: ago(m[0]), session_id: s.id, source: 'suggested', restaurant_id: R(m[1]).id, dish_id: D(m[2]).id, rating: m[3], tastes: m[4], feeling: m[5], context_tags: m[7] } });
     });
     GasDemo.save();
   }
@@ -358,6 +352,7 @@
     if (name === 'ask' && !S.ask) name = 'home';
     if (name === 'places' && !S.pick) name = S.ask ? 'ask' : 'home';
     if (name === 'memo' && !S.memo) name = 'home';
+    if (name === 'quick' && !S.quick) name = 'home';
     var changed = S.route !== name || S.param !== param;
     if (name === 'cats' && S.route !== 'cats') { S.cats.back = S.lastHash && !/^#\/?cats/.test(S.lastHash) ? S.lastHash : '#/settings'; S.cats.edit = null; }
     S.lastHash = location.hash || '#/home';
@@ -436,8 +431,10 @@
       '<a class="icon-btn" href="#/settings" aria-label="Cài đặt">' + I.gear + '</a></div>' +
       '<div class="hero"><span class="kicker">' + when + ', ' + Utilities.formatDate(new Date(), 'Asia/Ho_Chi_Minh', 'HH:mm') + '</span>' +
       '<span class="h-xl">Hôm nay ăn gì đây ta?</span>' +
-      '<p>' + esc(user()) + ' trả lời vài câu A hay B, ' + esc(bot()) + ' chọn món rồi tìm luôn quán còn mở gần nhà.</p>' +
-      '<button class="btn btn-light" data-act="startAsk">Hỏi ' + esc(bot()) + ' đi ' + I.arrow + '</button></div>' +
+      '<p>Bấm Gợi ý nhanh để ' + esc(bot()) + ' chọn liền theo thời tiết, giờ giấc và tâm trạng, hoặc trả lời vài câu A hay B.</p>' +
+      '<div class="hero-actions"><button class="btn btn-light" data-act="startQuick">Gợi ý nhanh ⚡</button>' +
+      '<button class="btn btn-hero-ghost" data-act="startAsk">Hỏi ' + esc(bot()) + ' đi ' + I.arrow + '</button></div></div>' +
+      ctxBand() +
       '<div class="tiles">' +
       '<a class="tile" href="#/book">' + I.book + '<strong>Sổ quán</strong><span>' + d.restaurants.length + ' quán · ' + d.dishes.length + ' món</span></a>' +
       '<a class="tile" href="#/stats">' + I.chart + '<strong>Thống kê</strong><span>' + (st ? 'Tháng này ' + st.totalMeals + ' bữa' : 'Xem khẩu vị') + '</span></a></div>' +
@@ -450,26 +447,29 @@
 
   // ───────────────────────── Màn: hỏi A/B ─────────────────────────
   function startAsk() {
-    S.ask = { answers: [], rejected: [], phase: 'ask', q: null, dish: null, relaxed: [], startedAt: nowIso(), sessionPromise: null };
-    S.pick = null;
+    S.ask = { answers: [], rejected: [], phase: 'ask', q: null, dish: null, relaxed: [], reasons: [], startedAt: nowIso(), sessionPromise: null, ctxPayload: ctxPayload('ab') };
+    S.pick = null; S.quick = null;
     nextQ();
     go('#/ask');
   }
   function nextQ() {
     var a = S.ask;
-    var r = nextQuestion_(S.data, { answers: a.answers, rejected: a.rejected });
+    var r = nextQuestion_(S.data, { answers: a.answers, rejected: a.rejected, context: a.ctxPayload });
     if (r.question) { a.phase = 'ask'; a.q = r.question; } else { a.phase = 'out'; }
   }
   function suggest() {
     var a = S.ask;
-    var s = suggestDish_(S.data, { answers: a.answers, rejected: a.rejected });
-    if (s.dish) { a.phase = 'suggest'; a.dish = s.dish; a.relaxed = s.relaxed; a.exhausted = false; }
+    var s = suggestDish_(S.data, { answers: a.answers, rejected: a.rejected, context: a.ctxPayload });
+    if (s.dish) { a.phase = 'suggest'; a.dish = s.dish; a.relaxed = s.relaxed; a.reasons = s.reasons || []; a.exhausted = false; }
     else { a.phase = 'out'; a.exhausted = true; }
   }
   function saveSessionBg(outcome) {
-    var a = S.ask;
-    if (!a || !a.answers.length) return;
-    var body = { answers: a.answers, rejected: a.rejected, final_dish_id: a.dish ? a.dish.id : '', outcome: outcome };
+    var a = S.ask || S.quick;
+    if (!a || (!a.isQuick && !a.answers.length)) return;
+    var body = {
+      answers: a.answers, rejected: a.rejected, final_dish_id: a.dish ? a.dish.id : '', outcome: outcome,
+      context: a.isQuick ? (a.result && a.result.context) : a.ctxPayload
+    };
     if (a.sessionPromise) {
       a.sessionPromise = a.sessionPromise.then(function (id) {
         if (!id) return null;
@@ -508,7 +508,7 @@
         '<span class="dish-name">' + esc(d.name) + '</span>' +
         '<span class="small muted">' + esc(lastTxt) + ' · ' + d.restaurant_count + ' quán có món này</span>' +
         (dishAttrsOn(d).length ? '<div class="chips" style="justify-content:center">' + dishAttrsOn(d).map(function (t) { return '<span class="chip chip-green">' + esc(t) + '</span>'; }).join('') + '</div>' : '') +
-        '</div>' +
+        '</div>' + whyBox(a.reasons, true) +
         (a.relaxed && a.relaxed.length ? '<div class="note">Hông có món nào khớp hết, ' + esc(bot()) + ' đã bỏ bớt câu: ' + esc(a.relaxed.join(' · ')) + '</div>' : '') +
         '<div class="btn-row"><button class="btn btn-outline" data-act="reject">Hông chịu</button>' +
         '<button class="btn btn-primary" data-act="goEat">Đi luôn</button></div></div>';
@@ -530,6 +530,239 @@
       '</section>';
   }
 
+  // ───────────────────────── Ngữ cảnh (thời tiết · giờ · tâm trạng · dịp) ─────────────────────────
+  function ctxRules(type) { return (S.data.contextRules || []).filter(function (r) { return r.type === type; }); }
+  function ctxRule(type, key) { return ctxRules(type).filter(function (r) { return String(r.key) === String(key); })[0]; }
+  function ctxPayload(mode) { return Ctx.payload(mode, { weather: S.ctx.weather, pos: S.pos }); }
+  function homeCoords() {
+    var c = S.data.config || {};
+    return hasScore(c.home_lat) && hasScore(c.home_lng) ? { lat: Number(c.home_lat), lng: Number(c.home_lng) } : null;
+  }
+  function radiusKm() {
+    var r = Ctx.state.radius_km;
+    return r === undefined ? Number((S.data.config || {}).default_radius_km || 5) : r;
+  }
+  /** Ngữ cảnh hiện tại tính ngay trên máy bằng deriveContext_ của Code.gs (cùng logic với backend). */
+  function ctxNow() {
+    if (typeof deriveContext_ !== 'function') return null;
+    try { return deriveContext_(S.data, ctxPayload('quick'), new Date()); } catch (e) { return null; }
+  }
+  /** Lấy vị trí (chỉ hỏi quyền khi askLocation) rồi thời tiết theo vị trí, hoặc theo nhà nếu chưa có vị trí. */
+  function warmContext(askLocation) {
+    var c = S.ctx;
+    var loc = askLocation ? getPos(true)
+      : Ctx.locationPermission().then(function (st) { return st === 'granted' ? getPos() : null; });
+    return loc.then(function (pos) {
+      var at = pos || homeCoords();
+      if (!at) { if (!c.weather) c.weatherState = 'none'; return; }
+      if (!c.weather) c.weatherState = 'loading';
+      return Ctx.fetchWeather(at.lat, at.lng).then(function (w) {
+        if (w) c.weather = w;
+        c.weatherState = c.weather ? 'ok' : 'fail';
+      });
+    });
+  }
+  function cchip(act, k, label, on, extra) {
+    return '<button type="button" class="cchip' + (on ? ' on' : '') + (extra || '') + '" data-act="' + act + '"' + (k != null ? ' data-k="' + esc(k) + '"' : '') +
+      ' aria-pressed="' + !!on + '">' + label + '</button>';
+  }
+  function ctxBand() {
+    var cx = ctxNow();
+    if (!cx) return '';
+    var st = Ctx.state; var w = S.ctx.weather;
+    var wRules = (cx.weather.keys || []).map(function (k) { return ctxRule('weather', k); }).filter(Boolean);
+    var wText = st.weather_override === 'none' ? 'Bỏ qua thời tiết'
+      : wRules.length ? wRules.map(function (r) { return r.label; }).join(' · ')
+        : w ? 'Dễ chịu' : S.ctx.weatherState === 'loading' ? 'Đang xem trời…' : 'Thời tiết?';
+    var temp = w && w.temp != null && !st.weather_override ? ' · ' + Math.round(w.temp) + '°' : '';
+    var tRule = ctxRule('time', cx.time_bucket);
+    var r = radiusKm();
+    var where = S.pos ? 'Quanh đây' : homeCoords() ? 'Từ nhà' : 'Bật vị trí';
+    var moods = ctxRules('mood'); var occs = ctxRules('occasion');
+    var greet = cx.auto_occasions.filter(function (k) { return cx.occasions.indexOf(k) >= 0; })
+      .map(function (k) { return ctxRule('occasion', k); }).filter(function (x) { return x && x.message; })[0];
+    return '<div class="ctx-band" aria-label="Ngữ cảnh gợi ý">' +
+      (greet ? '<div class="greet">' + esc(greet.emoji || '🎉') + ' ' + esc(greet.message) + '</div>' : '') +
+      '<div class="chip-scroll">' +
+      cchip('ctxLoc', null, '📍 ' + esc(where) + ' · ' + (r ? r + ' km' : 'mọi nơi')) +
+      cchip('ctxWeather', null, esc((wRules[0] && wRules[0].emoji) || (st.weather_override === 'none' ? '🚫' : '⛅')) + ' ' + esc(wText) + temp, false, st.weather_override ? ' manual' : '') +
+      (tRule ? '<span class="cchip static">' + esc(tRule.emoji || '🕒') + ' ' + esc(tRule.label) + '</span>' : '') +
+      '</div>' +
+      (moods.length ? '<span class="ctx-label">' + esc(user()) + ' thấy sao? <span class="muted">(chọn tối đa 2)</span></span><div class="chip-scroll">' +
+        moods.map(function (m) { return cchip('ctxMood', m.key, esc(m.emoji || '') + ' ' + esc(m.label), st.moods.indexOf(String(m.key)) >= 0); }).join('') + '</div>' : '') +
+      (occs.length ? '<span class="ctx-label">Dịp đặc biệt</span><div class="chip-scroll">' +
+        occs.map(function (o) {
+          var auto = cx.auto_occasions.indexOf(String(o.key)) >= 0;
+          var on = cx.occasions.indexOf(String(o.key)) >= 0;
+          return cchip('ctxOcc', o.key, esc(o.emoji || '') + ' ' + esc(o.label), on, auto ? ' today" data-auto="1' : '');
+        }).join('') + '</div>' : '') +
+      '</div>';
+  }
+  function openModal(html) {
+    closeModal();
+    var el = document.createElement('div');
+    el.className = 'modal';
+    el.innerHTML = '<div class="sheet card stack" role="dialog" aria-modal="true">' + html + '</div>';
+    document.body.appendChild(el);
+    var f = el.querySelector('button, select'); if (f) f.focus();
+  }
+  function openLocSheet() {
+    var r = radiusKm();
+    var opt = function (v, label) {
+      var on = v === 'none' ? r === null : r === v;
+      return '<button class="btn ' + (on ? 'btn-primary' : 'btn-outline') + '" data-act="ctxRadius" data-r="' + v + '">' + label + '</button>';
+    };
+    openModal('<h2 class="h2">Tìm quán trong bán kính</h2>' +
+      '<span class="small muted">' + (S.pos ? 'Đang dùng vị trí hiện tại của ' + esc(user()) + '.'
+        : homeCoords() ? 'Chưa có vị trí điện thoại nên ' + esc(bot()) + ' tính từ nhà.' : 'Chưa có vị trí, ' + esc(user()) + ' cho phép định vị nha.') + '</span>' +
+      '<div class="grid-2">' + opt(1, '1 km') + opt(3, '3 km') + opt(5, '5 km') + opt('none', 'Không giới hạn') + '</div>' +
+      '<button class="btn btn-ghost" data-act="modalClose">Xong</button>');
+  }
+  function openWeatherSheet() {
+    var cur = Ctx.state.weather_override;
+    var opt = function (k, label) {
+      return '<button class="btn ' + ((cur || '') === k ? 'btn-primary' : 'btn-outline') + '" data-act="ctxWeatherSet" data-k="' + k + '">' + label + '</button>';
+    };
+    var w = S.ctx.weather;
+    openModal('<h2 class="h2">Thời tiết</h2>' +
+      '<span class="small muted">' + (w ? 'Ngoài trời ' + Math.round(w.temp) + '°C, độ ẩm ' + Math.round(w.humidity) + '%' + (w.rain_prob != null ? ', khả năng mưa ' + Math.round(w.rain_prob) + '%' : '') + '.'
+        : 'Chưa lấy được thời tiết, ' + esc(user()) + ' chọn tay nha.') + '</span>' +
+      '<div class="grid-2">' + opt('', 'Tự động') +
+      ['rain', 'cool', 'cold', 'hot', 'hot_humid'].map(function (k) {
+        var r = ctxRule('weather', k);
+        return r ? opt(k, esc((r.emoji || '') + ' ' + r.label)) : '';
+      }).join('') + opt('none', 'Bỏ qua') + '</div>' +
+      '<button class="btn btn-ghost" data-act="modalClose">Đóng</button>');
+  }
+  function whyBox(reasons, compact) {
+    if (!reasons || !reasons.length) return compact ? '' : '<div class="why"><span class="why-t">Vì sao ' + esc(bot()) + ' chọn món này?</span>' +
+      '<span>' + esc(bot()) + ' bốc thăm theo khẩu vị của ' + esc(user()) + ' đó, món hay ăn gần đây được nhường chỗ cho món khác.</span></div>';
+    return '<div class="why"><span class="why-t">Vì sao ' + esc(bot()) + ' chọn món này?</span>' +
+      reasons.map(function (t) { return '<span>' + esc(t) + '</span>'; }).join('') + '</div>';
+  }
+
+  // ───────────────────────── Màn: gợi ý nhanh ─────────────────────────
+  function startQuick() {
+    S.ask = null; S.pick = null;
+    var q = S.quick = { isQuick: true, loading: true, answers: [], rejected: [], result: null, dish: null, nearby: null, startedAt: nowIso(), sessionPromise: null };
+    go('#/quick');
+    warmContext(true).then(function () { runQuick(q); }, function () { runQuick(q); });
+  }
+  function runQuick(q, dishId) {
+    var res = suggestQuick_(S.data, { context: ctxPayload('quick'), rejected: q.rejected, dish_id: dishId });
+    q.result = res; q.dish = res.dish; q.loading = false;
+    if (res.dish && !q.nearby) loadNearby(q);
+    if (S.route === 'quick' && S.quick === q) render();
+  }
+  function vQuick() {
+    var q = S.quick;
+    if (q.loading) {
+      return '<section class="screen">' + topbar('#/home', 'Gợi ý nhanh', esc(bot()) + ' đang nghĩ…') +
+        '<div class="ask-body" style="align-items:center"><div class="spinner"></div><span class="muted center">' + esc(bot()) +
+        ' đang xem trời, xem giờ, dò quán quanh ' + esc(user()) + '…</span></div></section>';
+    }
+    var r = q.result;
+    if (r.exhausted) {
+      return '<section class="screen">' + topbar('#/home', 'Gợi ý nhanh', 'Hết món rồi') +
+        '<div class="ask-body center pop" style="align-items:center"><span class="h-xl" style="font-size:30px">' + esc(user()) + ' chê hết món trong sổ rồi!</span>' +
+        '<button class="btn btn-primary" data-act="selfFind">Để bố tự tìm</button>' +
+        '<button class="btn btn-outline" data-act="startQuick">Gợi ý lại từ đầu</button>' +
+        '<button class="btn btn-ghost" data-act="startAsk">Hỏi A/B</button></div></section>';
+    }
+    var d = r.dish; var c = r.context || {}; var res = r.restaurants || { open: [], closed: [] };
+    var tags = (c.keys || []).map(function (k) {
+      var rule = (S.data.contextRules || []).filter(function (x) { return String(x.key) === k; })[0];
+      return rule ? '<span class="chip">' + esc((rule.emoji || '') + ' ' + rule.label) + '</span>' : '';
+    }).join('');
+    var lastTxt = d.last_eaten ? 'Lần cuối ăn: ' + relDays(d.last_eaten) : 'Chưa ăn lần nào';
+    var locNote = res.location_source === 'home' ? 'Chưa lấy được vị trí điện thoại nên ' + bot() + ' tính khoảng cách từ nhà.'
+      : res.location_source === 'none' ? 'Chưa có vị trí nên chưa biết quán nào gần nhất.' : '';
+    var places = res.open.length ? placeCards(res.open, 'quick')
+      : '<div class="card empty"><strong style="color:var(--ink)">Giờ này chưa có quán nào trong sổ đang bán ' + esc(d.name) + '</strong>' +
+        (res.closed.length ? '<span class="small">' + res.closed.map(function (x) { return esc(x.name) + (x.open_time ? ' (mở ' + esc(x.open_time) + ')' : ''); }).join(' · ') + '</span>' : '') + '</div>';
+    return '<section class="screen">' + topbar('#/home', 'Gợi ý nhanh', 'Ăn món này nha ' + user()) +
+      (tags ? '<div class="chips">' + tags + '</div>' : '') +
+      '<div class="dish-card pop"><div class="dish-art">' + (d.image_url ? '<img src="' + esc(d.image_url) + '" alt="">' : I.bowl) + '</div>' +
+      '<span class="dish-name">' + esc(d.name) + '</span>' +
+      '<span class="small muted">' + esc(lastTxt) + ' · ' + d.restaurant_count + ' quán có món này</span>' +
+      (dishAttrsOn(d).length ? '<div class="chips" style="justify-content:center">' + dishAttrsOn(d).map(function (t) { return '<span class="chip chip-green">' + esc(t) + '</span>'; }).join('') + '</div>' : '') +
+      '</div>' + whyBox(r.reasons) +
+      (r.alternatives && r.alternatives.length ? '<div class="chips"><span class="small muted">Hoặc là:</span>' + r.alternatives.map(function (x) {
+        return '<button class="filter" data-act="quickAlt" data-id="' + esc(x.id) + '">' + esc(x.name) + '</button>';
+      }).join('') + '</div>' : '') +
+      '<div class="btn-row"><button class="btn btn-outline" data-act="quickReject">Hông chịu</button>' +
+      '<button class="btn btn-ghost" data-act="startAsk">Hỏi A/B</button></div>' +
+      '<h2 class="h2 group-h">Quán có ' + esc(d.name) + '</h2>' +
+      (locNote ? '<div class="note">' + esc(locNote) + '</div>' : '') +
+      '<div class="list">' + places + '</div>' +
+      '<div id="nearby" class="stack">' + nearbyHtml(q) + '</div>' +
+      '<button class="link-quiet" data-act="selfFind">Hông thích quán nào, để bố tự tìm</button></section>';
+  }
+
+  // ── Quán mới quanh đây (OpenStreetMap) ──
+  var AMENITY = { restaurant: 'Nhà hàng', cafe: 'Cà phê', fast_food: 'Đồ ăn nhanh', food_court: 'Khu ẩm thực' };
+  function loadNearby(q) {
+    var at = S.pos || homeCoords();
+    if (!at) { q.nearby = { state: 'none', list: [] }; return; }
+    q.nearby = { state: 'loading', list: [] };
+    var known = S.data.restaurants;
+    Ctx.fetchNearbyPlaces(at.lat, at.lng, Math.min(radiusKm() || 3, 3)).then(function (list) {
+      var fresh = list.filter(function (p) {
+        return !known.some(function (r) {
+          if (norm(r.name) === norm(p.name)) return true;
+          return hasScore(r.lat) && hasScore(r.lng) && haversineKm_(Number(r.lat), Number(r.lng), p.lat, p.lng) < 0.06;
+        });
+      }).map(function (p) { return Object.assign(p, { distance_km: round1_(haversineKm_(at.lat, at.lng, p.lat, p.lng)) }); })
+        .sort(function (a, b) { return a.distance_km - b.distance_km; }).slice(0, 8);
+      q.nearby = { state: 'ok', list: fresh };
+      var box = $('#nearby');
+      if (box && S.route === 'quick' && S.quick === q) box.innerHTML = nearbyHtml(q);
+    });
+  }
+  function nearbyHtml(q) {
+    var n = q.nearby;
+    if (!n || n.state === 'none') return '';
+    var head = '<h2 class="h2 group-h">Quán mới quanh đây</h2>';
+    if (n.state === 'loading') return head + '<div class="row small muted"><div class="spinner sm"></div>Đang dò quán quanh ' + esc(user()) + '…</div>';
+    if (!n.list.length) return head + '<span class="small muted">Chưa thấy quán mới nào quanh đây.</span>';
+    return head + '<span class="small muted">Từ bản đồ OpenStreetMap, chưa có trong sổ nên ' + esc(bot()) + ' chưa biết quán bán món gì.</span>' +
+      n.list.map(function (p, i) {
+        var meta = [kmText(p.distance_km), AMENITY[p.amenity] || '', p.cuisine ? p.cuisine.replace(/;/g, ', ').replace(/_/g, ' ') : ''].filter(Boolean);
+        return '<article class="card place osm"><div class="top"><div class="stack" style="gap:3px;min-width:0"><span class="name">' + esc(p.name) + '</span>' +
+          (p.address ? '<span class="small muted">' + esc(p.address) + '</span>' : '') + '</div><span class="badge badge-soft">chưa lưu trong sổ</span></div>' +
+          '<div class="meta">' + meta.map(function (t) { return '<span>' + esc(t) + '</span>'; }).join('') + '</div>' +
+          '<div class="btn-row"><a class="btn btn-outline" href="https://www.google.com/maps/dir/?api=1&destination=' + p.lat + ',' + p.lng + '" target="_blank" rel="noopener">Chỉ đường</a>' +
+          (p.added ? '<a class="btn btn-outline" href="#/shop/' + esc(p.added) + '">Mở trong sổ</a>'
+            : '<button class="btn btn-primary" data-act="osmAdd" data-i="' + i + '">Thêm vào sổ quán</button>') + '</div></article>';
+      }).join('') +
+      '<span class="small muted">Dữ liệu bản đồ © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a></span>';
+  }
+  /** Đoán phân loại quán từ thẻ OSM; chỉ dùng nếu phân loại đó có trong danh sách cố định. */
+  function osmCategory(p) {
+    var c = String(p.cuisine || '').toLowerCase();
+    var guess = /coffee/.test(c) || p.amenity === 'cafe' ? 'Cà phê'
+      : /bubble_tea|tea/.test(c) ? 'Trà sữa' : /pho|noodle/.test(c) ? 'Bún/Phở' : /hot_?pot/.test(c) ? 'Lẩu'
+        : /bbq|barbecue|grill/.test(c) ? 'Nướng' : /japanese|sushi|ramen/.test(c) ? 'Đồ Nhật' : /korean/.test(c) ? 'Đồ Hàn'
+          : /thai/.test(c) ? 'Đồ Thái' : /chinese/.test(c) ? 'Đồ Hoa' : /pizza|burger|italian|steak|western/.test(c) ? 'Đồ Âu'
+            : /chicken/.test(c) ? 'Gà rán' : /rice/.test(c) ? 'Cơm' : '';
+    var hit = catList('restaurant').filter(function (x) { return lower(x.name) === lower(guess); })[0];
+    return hit ? hit.name : '';
+  }
+  function addOsmPlace(i, btn) {
+    var q = S.quick; var p = q && q.nearby && q.nearby.list[i];
+    if (!p) return;
+    btn.disabled = true; btn.textContent = 'Đang thêm…';
+    api('create', { table: 'restaurants', data: {
+      name: p.name, lat: p.lat, lng: p.lng, address: p.address, category: osmCategory(p), comment: 'Thêm từ OpenStreetMap'
+    } }).then(function (r) {
+      p.added = r.id;
+      return refreshData();
+    }).then(function () {
+      toast('Đã thêm ' + p.name + ' vào sổ. Mở quán để tick món quán bán nha');
+      var box = $('#nearby'); if (box) box.innerHTML = nearbyHtml(q);
+    }).catch(function (e) { btn.disabled = false; btn.textContent = 'Thêm vào sổ quán'; toast(e.message, true); });
+  }
+
   // ───────────────────────── Màn: gợi ý quán ─────────────────────────
   function vPlaces() {
     var p = S.pick; var d = p.dish;
@@ -544,18 +777,7 @@
     if (p.sort === 'near') list.sort(function (a, b) { return (a.distance_km == null ? 1e9 : a.distance_km) - (b.distance_km == null ? 1e9 : b.distance_km); });
     var locNote = r.location_source === 'home' ? 'Chưa lấy được vị trí điện thoại nên ' + bot() + ' tính khoảng cách từ nhà.'
       : r.location_source === 'none' ? 'Chưa bật vị trí nên chưa biết quán nào gần nhất.' : '';
-    var cards = list.map(function (x) {
-      var badges = (x.is_best ? '<span class="badge">Ngon nhất</span>' : '') + (x.is_nearest ? '<span class="badge badge-green">Gần nhất</span>' : '');
-      var score = shopScore(x); var subs = subScores(x);
-      return '<article class="card place">' + (badges ? '<div class="chips">' + badges + '</div>' : '') +
-        '<div class="top"><div class="stack" style="gap:3px;min-width:0"><span class="name">' + esc(x.name) + '</span>' +
-        (x.address ? '<span class="small muted">' + esc(x.address) + '</span>' : '') + '</div>' +
-        (score != null ? '<span class="rating">' + I.star + Number(score).toFixed(1) + '</span>' : '') + '</div>' +
-        (subs || x.dish_rating != null ? '<span class="small muted">' + esc([subs, x.dish_rating != null ? 'Món này ' + fmtScore(x.dish_rating) : ''].filter(Boolean).join(' · ')) + '</span>' : '') +
-        '<div class="meta">' + [kmText(x.distance_km), x.close_time ? 'Mở đến ' + esc(x.close_time) : '', priceText(x)].filter(Boolean).map(function (t) { return '<span>' + t + '</span>'; }).join('') + '</div>' +
-        '<div class="btn-row">' + (x.maps_link ? '<a class="btn btn-outline" href="' + esc(x.maps_link) + '" target="_blank" rel="noopener">Chỉ đường</a>' : '') +
-        '<button class="btn btn-primary" data-act="pickPlace" data-id="' + esc(x.id) + '">Chọn quán này</button></div></article>';
-    }).join('');
+    var cards = placeCards(list, 'pick');
     var empty = '';
     if (!list.length) {
       empty = '<div class="card empty"><strong style="color:var(--ink)">Giờ này quán bán ' + esc(d.name) + ' đóng hết rồi</strong>' +
@@ -571,10 +793,29 @@
       (list.length ? '<button class="link-quiet" data-act="selfFind">Hông thích quán nào, để bố tự tìm</button>' : '') +
       '</section>';
   }
+  /** Thẻ quán dùng chung cho màn gợi ý quán và Gợi ý nhanh. Quán ngoài bán kính gom vào "Xa hơn một chút". */
+  function placeCard(x, src) {
+    var badges = (x.is_best ? '<span class="badge">Ngon nhất</span>' : '') + (x.is_nearest ? '<span class="badge badge-green">Gần nhất</span>' : '');
+    var score = shopScore(x); var subs = subScores(x);
+    return '<article class="card place">' + (badges ? '<div class="chips">' + badges + '</div>' : '') +
+      '<div class="top"><div class="stack" style="gap:3px;min-width:0"><span class="name">' + esc(x.name) + '</span>' +
+      (x.address ? '<span class="small muted">' + esc(x.address) + '</span>' : '') + '</div>' +
+      (score != null ? '<span class="rating">' + I.star + Number(score).toFixed(1) + '</span>' : '') + '</div>' +
+      (subs || x.dish_rating != null ? '<span class="small muted">' + esc([subs, x.dish_rating != null ? 'Món này ' + fmtScore(x.dish_rating) : ''].filter(Boolean).join(' · ')) + '</span>' : '') +
+      '<div class="meta">' + [kmText(x.distance_km), x.close_time ? 'Mở đến ' + esc(x.close_time) : '', priceText(x)].filter(Boolean).map(function (t) { return '<span>' + t + '</span>'; }).join('') + '</div>' +
+      '<div class="btn-row">' + (x.maps_link ? '<a class="btn btn-outline" href="' + esc(x.maps_link) + '" target="_blank" rel="noopener">Chỉ đường</a>' : '') +
+      '<button class="btn btn-primary" data-act="pickPlace" data-src="' + src + '" data-id="' + esc(x.id) + '">Chọn quán này</button></div></article>';
+  }
+  function placeCards(list, src) {
+    var near = list.filter(function (x) { return !x.out_of_radius; });
+    var far = list.filter(function (x) { return x.out_of_radius; });
+    return near.map(function (x) { return placeCard(x, src); }).join('') +
+      (far.length ? '<h2 class="h2 group-h">Xa hơn một chút</h2>' + far.map(function (x) { return placeCard(x, src); }).join('') : '');
+  }
   function loadPlaces() {
     var p = S.pick;
     getPos().then(function (pos) {
-      p.result = suggestRestaurants_(S.data, { dish_id: p.dish.id, lat: pos && pos.lat, lng: pos && pos.lng });
+      p.result = suggestRestaurants_(S.data, { dish_id: p.dish.id, lat: pos && pos.lat, lng: pos && pos.lng, context: S.ask ? S.ask.ctxPayload : undefined });
       p.loading = false;
       if (S.route === 'places' && S.pick === p) render();
     });
@@ -585,7 +826,7 @@
     var m = S.memo; var self = m.mode === 'self';
     var head = self
       ? topbar(m.back || '#/home', 'Để bố tự tìm', 'Hôm nay ' + user() + ' ăn ở đâu thế?')
-      : topbar('#/places', m.restaurant.name + ' · ' + fmtDate(today()), 'Bữa nay thấy sao ' + user() + '?');
+      : topbar(m.back || '#/places', m.restaurant.name + ' · ' + fmtDate(today()), 'Bữa nay thấy sao ' + user() + '?');
     var placeFields = '';
     if (self) {
       var shops = S.data.restaurants.slice().sort(byName);
@@ -639,14 +880,17 @@
       else if (dish) meal.dish_id = dish;
     }
     if (m.photo) payload.photo = m.photo;
+    var flow = S.ask || S.quick;
+    // Ngữ cảnh để lưu context_tags: Gợi ý nhanh gửi bản đã suy ra, A/B gửi bản thô (backend tự suy ra).
+    if (flow) payload.context = flow.isQuick ? flow.result && flow.result.context : flow.ctxPayload;
     btn.disabled = true; btn.textContent = 'Đang lưu…';
     prep.then(function () {
-      return S.ask && S.ask.sessionPromise ? S.ask.sessionPromise : null;
+      return flow && flow.sessionPromise ? flow.sessionPromise : null;
     }).then(function (sid) {
       if (sid) meal.session_id = sid;
       return api('saveMeal', payload);
     }).then(function () {
-      S.ask = null; S.pick = null; S.memo = null; S.memories = null;
+      S.ask = null; S.quick = null; S.pick = null; S.memo = null; S.memories = null;
       S.home.loaded = false; S.stats.data = null;
       return refreshData();
     }).then(function () {
@@ -949,6 +1193,7 @@
         return '<div class="bar-row"><span class="k">' + esc(t.label) + '</span><span class="track"><span class="fill" style="display:block;width:' + t.percent + '%"></span></span><span class="v">' + t.percent + '%</span></div>';
       }).join('') + '<span class="small muted">Tính từ ' + d.tasteWindow.meals + ' bữa, đến ngày ' + esc(fmtDate(d.tasteWindow.until)) + '</span>'
         : '<span class="small muted">Chưa có bữa nào trong khoảng này.</span>') + '</div>' +
+      insightsCard(d) +
       '<div class="card stack"><h2 class="h2">Ăn lại nhiều nhất tháng ' + Number(p[1]) + '</h2>' +
       (d.topDishes.length ? d.topDishes.map(function (x, i) {
         return '<div class="row"><span class="rank">' + (i + 1) + '</span><span class="grow" style="font-weight:600">' + esc(x.name) + '</span><span class="small muted">' + x.times + ' lần</span></div>';
@@ -962,6 +1207,19 @@
         return src ? '<img src="' + esc(src) + '" alt="' + esc(ph.dish_name || 'Bữa ăn') + '" loading="lazy">' : '<div></div>';
       }).join('') + '</div>' : '<div class="card small muted">Chưa có ảnh nào. Lần tới nhớ chụp nha!</div>') + '</div>' +
       '</section>' + nav('stats');
+  }
+  /** "Leeming nhận ra…": thuộc tính món chênh nhiều nhất theo từng ngữ cảnh (đủ số bữa mới hiện). */
+  function insightsCard(d) {
+    var list = (d.contextInsights || []).slice(0, 4);
+    var lf = function (s) { s = String(s || ''); return s.charAt(0).toLowerCase() + s.slice(1); };
+    return '<div class="card stack"><h2 class="h2">' + esc(bot()) + ' nhận ra…</h2>' +
+      (list.length ? list.map(function (ci) {
+        return '<div class="insight"><strong>' + esc((ci.emoji ? ci.emoji + ' ' : '') + ci.label) + '</strong> <span class="small muted">· ' + ci.meals + ' bữa</span>' +
+          ci.insights.map(function (x) {
+            return '<span class="small">' + x.percent + '% món ' + esc(lf(x.label)) + ' <span class="muted">(bình thường ' + x.baseline + '%)</span></span>';
+          }).join('') + '</div>';
+      }).join('')
+        : '<span class="small muted">Ăn thêm vài bữa nữa ' + esc(bot()) + ' sẽ biết ' + esc(user()) + ' thích gì mỗi khi trời mưa nhé.</span>') + '</div>';
   }
   function loadStats() {
     var st = S.stats; var month = st.month || today().slice(0, 7);
@@ -1014,9 +1272,13 @@
   }
 
   // ───────────────────────── Bảng màn hình ─────────────────────────
-  var VIEWS = { home: vHome, ask: vAsk, places: vPlaces, memo: vMemo, memories: vMemories, book: vBook, shop: vShop, dish: vDish, cats: vCats, stats: vStats, settings: vSettings };
+  var VIEWS = { home: vHome, ask: vAsk, quick: vQuick, places: vPlaces, memo: vMemo, memories: vMemories, book: vBook, shop: vShop, dish: vDish, cats: vCats, stats: vStats, settings: vSettings };
   var AFTER = {
     home: function () {
+      if (!S.ctx.warmed) {
+        S.ctx.warmed = true;
+        warmContext(false).then(function () { if (S.route === 'home') render(); });
+      }
       if (S.home.loaded || S.home.loading) return;
       S.home.loading = true;
       Promise.all([api('getStats', {}), api('getMeals', { limit: 1 })]).then(function (r) {
@@ -1025,6 +1287,7 @@
       }).catch(function () { S.home.loading = false; S.home.loaded = true; });
     },
     places: function () { if (S.pick.loading && !S.pick.started) { S.pick.started = true; loadPlaces(); } },
+    quick: function () { var box = $('#nearby'); if (box && S.quick) box.innerHTML = nearbyHtml(S.quick); },
     memories: function () {
       if (S.memories || S.memLoading) return;
       S.memLoading = true;
@@ -1060,17 +1323,51 @@
     },
     sortPlaces: function (el) { S.pick.sort = el.dataset.s; render(); },
     pickPlace: function (el) {
-      var r = S.pick.result.open.filter(function (x) { return x.id === el.dataset.id; })[0];
-      S.memo = { mode: 'suggested', restaurant: r, dish: S.pick.dish, photo: null, preview: null };
+      var quick = el.dataset.src === 'quick';
+      var list = quick ? S.quick.result.restaurants.open : S.pick.result.open;
+      var r = list.filter(function (x) { return x.id === el.dataset.id; })[0];
+      if (quick) saveSessionBg('di_luon');
+      S.memo = { mode: 'suggested', restaurant: r, dish: quick ? S.quick.result.dish : S.pick.dish, photo: null, preview: null, back: quick ? '#/quick' : '#/places' };
       go('#/memo');
     },
+    startQuick: startQuick,
+    quickReject: function () { var q = S.quick; q.rejected.push(q.result.dish.id); runQuick(q); },
+    quickAlt: function (el) { runQuick(S.quick, el.dataset.id); window.scrollTo(0, 0); },
+    osmAdd: function (el) { addOsmPlace(Number(el.dataset.i), el); },
+    ctxMood: function (el) {
+      var st = Ctx.state; var k = el.dataset.k; var i = st.moods.indexOf(k);
+      if (i >= 0) st.moods.splice(i, 1);
+      else { st.moods.push(k); if (st.moods.length > 2) st.moods.shift(); }
+      Ctx.save(); render();
+    },
+    ctxOcc: function (el) {
+      var st = Ctx.state; var k = el.dataset.k;
+      var list = el.dataset.auto === '1' ? st.occasions_off : st.occasions;
+      var i = list.indexOf(k);
+      if (i >= 0) list.splice(i, 1); else list.push(k);
+      Ctx.save(); render();
+    },
+    ctxLoc: function () {
+      openLocSheet();
+      if (!S.pos) warmContext(true).then(function () { if (S.route === 'home') { render(); openLocSheet(); } });
+    },
+    ctxRadius: function (el) {
+      Ctx.state.radius_km = el.dataset.r === 'none' ? null : Number(el.dataset.r);
+      Ctx.save(); closeModal(); render();
+    },
+    ctxWeather: function () { openWeatherSheet(); },
+    ctxWeatherSet: function (el) {
+      Ctx.state.weather_override = el.dataset.k || null;
+      Ctx.save(); closeModal(); render();
+    },
     selfFind: function () {
-      if (S.ask) saveSessionBg('tu_tim');
-      S.memo = { mode: 'self', dish: S.ask && S.ask.dish, photo: null, preview: null, back: S.route === 'places' ? '#/places' : (S.ask ? '#/ask' : '#/home') };
+      if (S.ask || S.quick) saveSessionBg('tu_tim');
+      var flow = S.ask || S.quick;
+      S.memo = { mode: 'self', dish: flow && flow.dish, photo: null, preview: null, back: S.route === 'places' ? '#/places' : (S.quick ? '#/quick' : (S.ask ? '#/ask' : '#/home')) };
       go('#/memo');
     },
     newMemory: function () {
-      S.ask = null;
+      S.ask = null; S.quick = null;
       S.memo = { mode: 'self', photo: null, preview: null, back: '#/memories' };
       go('#/memo');
     },
