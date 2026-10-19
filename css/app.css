@@ -285,3 +285,21 @@ img { display: block; max-width: 100%; }
 }
 .choice:active .key { background: var(--ink); }
 .bottom-nav a:active, .link-quiet:active { border-radius: 14px; }
+
+/* ── Lưu kỷ niệm: các phần, món đã thử, bottom sheet thêm món ── */
+.section-h { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 800; font-size: 20px; margin: 8px 0 -4px; }
+.section-h span { width: 28px; height: 28px; border-radius: 14px; background: var(--pink); color: var(--deep); font-size: 15px; display: inline-flex; align-items: center; justify-content: center; }
+.tried { display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 12px 16px; }
+.input.sm { padding: 10px 12px; font-size: 15px; border-radius: 12px; }
+.mini-stars { display: flex; gap: 2px; }
+.mini-star { width: 40px; height: 40px; border: none; background: none; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 10px; }
+.mini-star svg { width: 28px; height: 28px; fill: none; stroke: var(--star); stroke-width: 1.5; }
+.mini-star.on svg { fill: var(--star); }
+.modal .sheet { max-height: 88vh; overflow-y: auto; }
+.pick-list { gap: 8px; }
+.list-item.pick { padding: 12px 14px; }
+.list-item.pick svg { width: 18px; height: 18px; color: var(--accent); flex-shrink: 0; }
+.list-item.pick[disabled] { opacity: .55; }
+.tried-list { display: flex; flex-direction: column; gap: 4px; border-top: 1px dashed var(--line-strong); padding-top: 8px; }
+.tried-item { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.mini-star:active { background: var(--sky); }

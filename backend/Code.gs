@@ -109,14 +109,20 @@ const TABLES = {
     sheet: 'Meals', prefix: 'M', soft: true,
     headers: ['id', 'date', 'session_id', 'source', 'restaurant_id', 'restaurant_name', 'dish_id', 'dish_name', 'rating',
       'tastes', 'feeling', 'photo_url', 'photo_file_id', 'is_new_place', 'context_tags', 'weather_temp',
-      'created_at', 'updated_at', 'deleted'],
-    num: ['rating', 'weather_temp'],
+      'quality', 'price_score', 'space', 'service', 'created_at', 'updated_at', 'deleted'],
+    num: ['rating', 'weather_temp', 'quality', 'price_score', 'space', 'service'],
     bool: ['is_new_place', 'deleted']
   },
   categories: {
     sheet: 'Categories', prefix: 'C', soft: false,
     headers: ['id', 'type', 'name', 'sort_order', 'created_at', 'updated_at'],
     num: ['sort_order'],
+    bool: []
+  },
+  mealDishes: {
+    sheet: 'MealDishes', prefix: 'MD', soft: false,
+    headers: ['id', 'meal_id', 'dish_id', 'dish_name', 'rating', 'note', 'created_at', 'updated_at'],
+    num: ['rating'],
     bool: []
   },
   contextRules: {
@@ -655,6 +661,53 @@ function setConfigValue_(key, value) {
 
 // ───────────────────────── DỮ LIỆU TỔNG ─────────────────────────
 
+/** Món đã thử của các bữa (bỏ dòng thuộc bữa đã xóa). */
+function mealDishesOf_(meals) {
+  const ids = {}; meals.forEach((m) => { ids[m.id] = true; });
+  return safeReadAll_('mealDishes').filter((x) => ids[x.meal_id]);
+}
+
+/** Số liệu theo quán từ các bữa: số bữa, điểm bữa trung bình, lần cuối, trung bình từng tiêu chí. */
+function restaurantMealStats_(meals) {
+  const out = {};
+  meals.forEach((m) => {
+    if (!m.restaurant_id) return;
+    const s = out[m.restaurant_id] || (out[m.restaurant_id] = { n: 0, sum: 0, cnt: 0, last: null, crit: {} });
+    s.n++;
+    if (isNum_(m.rating)) { s.sum += Number(m.rating); s.cnt++; }
+    if (m.date && (!s.last || m.date > s.last)) s.last = m.date;
+    Object.keys(RATING_WEIGHTS).forEach((k) => {
+      if (!isNum_(m[k])) return;
+      const c = s.crit[k] || (s.crit[k] = { sum: 0, n: 0 });
+      c.sum += Number(m[k]); c.n++;
+    });
+  });
+  return out;
+}
+
+/** Số liệu theo món: 1 bữa tính 1 lần cho mỗi món (món chính của bữa + các món đã thử).
+ *  Điểm món lấy từ MealDishes; bữa cũ chưa có MealDishes thì dùng điểm của bữa cho món chính. */
+function dishMealStats_(meals, mealDishes) {
+  const byMeal = {};
+  mealDishes.forEach((x) => { (byMeal[x.meal_id] = byMeal[x.meal_id] || []).push(x); });
+  const out = {};
+  const stat = (id) => out[id] || (out[id] = { n: 0, sum: 0, cnt: 0, last: null });
+  meals.forEach((m) => {
+    const rows = byMeal[m.id] || [];
+    const seen = {};
+    if (m.dish_id) seen[m.dish_id] = true;
+    rows.forEach((x) => { if (x.dish_id) seen[x.dish_id] = true; });
+    Object.keys(seen).forEach((id) => {
+      const s = stat(id);
+      s.n++;
+      if (m.date && (!s.last || m.date > s.last)) s.last = m.date;
+    });
+    rows.forEach((x) => { if (x.dish_id && isNum_(x.rating)) { const s = stat(x.dish_id); s.sum += Number(x.rating); s.cnt++; } });
+    if (!rows.length && m.dish_id && isNum_(m.rating)) { const s = stat(m.dish_id); s.sum += Number(m.rating); s.cnt++; }
+  });
+  return out;
+}
+
 /** Như readAll_ nhưng trả [] khi sheet chưa có (Sheet cũ chưa chạy lại setupSheets). */
 function safeReadAll_(table, includeDeleted) {
   const def = TABLES[table];
@@ -674,27 +727,21 @@ function bootstrap_() {
   const dishHeaders = headersOf_(sheet_('dishes'));
   const attrs = dishAttrs_(dishHeaders);
 
-  const agg = (key) => {
-    const m = {};
-    meals.forEach((x) => {
-      const id = x[key];
-      if (!id) return;
-      const s = m[id] || (m[id] = { n: 0, sum: 0, cnt: 0, last: null });
-      s.n++;
-      if (x.rating) { s.sum += Number(x.rating); s.cnt++; }
-      if (x.date && (!s.last || x.date > s.last)) s.last = x.date;
-    });
-    return m;
-  };
-  const rStat = agg('restaurant_id');
-  const dStat = agg('dish_id');
+  const mealDishes = mealDishesOf_(meals);
+  const rStat = restaurantMealStats_(meals);
+  const dStat = dishMealStats_(meals, mealDishes);
 
   restaurants.forEach((r) => {
     const s = rStat[r.id];
     r.visit_count = s ? s.n : 0;
     r.meal_rating_avg = s && s.cnt ? round1_(s.sum / s.cnt) : null;
     r.last_visit = s ? s.last : null;
-    // Điểm dùng để xếp hạng "Ngon nhất": ưu tiên điểm từ các bữa đã ăn, nếu chưa có thì dùng rating nhập tay.
+    // Trung bình từng tiêu chí qua các bữa đã ăn (điểm quán "cả quá trình").
+    r.meal_avg = {};
+    Object.keys(RATING_WEIGHTS).forEach((k) => {
+      r.meal_avg[k] = s && s.crit[k] && s.crit[k].n ? round1_(s.crit[k].sum / s.crit[k].n) : null;
+    });
+    // Điểm xếp hạng "Ngon nhất": trung bình các bữa đã ăn; quán chưa có bữa nào thì dùng rating nhập tay.
     r.score = r.meal_rating_avg != null ? r.meal_rating_avg : (r.rating != null ? r.rating : null);
   });
   dishes.forEach((d) => {
@@ -1339,6 +1386,12 @@ function saveSession_(s) {
 function saveMeal_(p) {
   const meal = Object.assign({}, p.meal || {});
   if (!meal.date) meal.date = today_();
+  // Điểm quán trong bữa này (4 tiêu chí như khi thêm quán): rating của bữa = trung bình cộng các tiêu chí có điểm.
+  checkScores_(meal);
+  const scored = Object.keys(RATING_WEIGHTS).filter((k) => isNum_(meal[k]));
+  if (scored.length) meal.rating = Math.round(scored.reduce((sum, k) => sum + Number(meal[k]), 0) / scored.length * 100) / 100;
+  // Món đã thử: kiểm tra hết trước khi ghi gì, để lỗi giữa chừng không để lại dữ liệu dở dang.
+  const items = checkMealDishes_(p.dishes);
   if (Array.isArray(meal.tastes)) meal.tastes = meal.tastes.join(', ');
   // Tag ngữ cảnh: lấy từ meal.context_tags, hoặc từ context gửi kèm, hoặc từ phiên (session_id).
   if (!splitTags_(meal.context_tags).length) {
@@ -1355,7 +1408,10 @@ function saveMeal_(p) {
   if (Array.isArray(meal.context_tags)) meal.context_tags = meal.context_tags.join(', ');
 
   if (p.newRestaurant && p.newRestaurant.name) {
-    const r = createRecord_('restaurants', p.newRestaurant);
+    // Quán mới tạo từ bữa ăn lấy luôn điểm bữa này làm điểm ban đầu (nếu không gửi riêng).
+    const nr = Object.assign({}, p.newRestaurant);
+    scored.forEach((k) => { if (!isNum_(nr[k])) nr[k] = meal[k]; });
+    const r = createRecord_('restaurants', nr);
     meal.restaurant_id = r.id;
     meal.restaurant_name = r.name;
     meal.is_new_place = true;
@@ -1364,6 +1420,15 @@ function saveMeal_(p) {
     const r = readAll_('restaurants', true).filter((x) => x.id === meal.restaurant_id)[0];
     if (r) meal.restaurant_name = r.name;
   }
+  // Món mới tạo trong bữa → thêm vào sổ món; mọi món đã thử → gán vào quán nếu chưa có.
+  items.forEach((x) => {
+    if (x.newDish) {
+      const d = createRecord_('dishes', x.newDish);
+      x.dish_id = d.id; x.dish_name = d.name;
+    }
+  });
+  if (meal.restaurant_id && items.length) linkMealDishes_(meal.restaurant_id, items);
+  if (!meal.dish_id && items.length) { meal.dish_id = items[0].dish_id; meal.dish_name = items[0].dish_name; }
   if (meal.dish_id && !meal.dish_name) {
     const d = readAll_('dishes', true).filter((x) => x.id === meal.dish_id)[0];
     if (d) meal.dish_name = d.name;
@@ -1379,6 +1444,14 @@ function saveMeal_(p) {
   }
 
   const saved = insert_('meals', meal);
+  if (items.length) {
+    saved.dishes = items.map((x) => insert_('mealDishes', {
+      meal_id: saved.id, dish_id: x.dish_id, dish_name: x.dish_name, rating: x.rating, note: x.note
+    }));
+    if (meal.restaurant_id) recalcDishRatings_(meal.restaurant_id, items.map((x) => x.dish_id));
+  } else {
+    saved.dishes = [];
+  }
   if (meal.session_id) {
     try {
       saveSession_({
@@ -1393,6 +1466,59 @@ function saveMeal_(p) {
 
 /** Ngữ cảnh gọn để lưu. Nhận bản đã suy ra (có keys) hoặc bản thô (thời tiết + mood + dịp) thì tự suy ra.
  *  Không lưu tọa độ. */
+/** dishes: [{dish_id?, newDish?:{name, category, ...thuộc tính}, rating?, note?, price?}] → danh sách đã kiểm tra.
+ *  Kèm dish_name cho món có sẵn. Món mới chưa được tạo ở bước này. */
+function checkMealDishes_(list) {
+  const items = (list || []).filter((x) => x && (x.dish_id || (x.newDish && String(x.newDish.name || '').trim())));
+  if (!items.length) return [];
+  const dMap = {}; readAll_('dishes').forEach((d) => { dMap[d.id] = d; });
+  return items.map((x) => {
+    const it = { rating: '', note: String(x.note || '').trim(), price: isNum_(x.price) ? Number(x.price) : '' };
+    if (x.rating !== undefined && x.rating !== null && x.rating !== '') {
+      const n = Number(x.rating);
+      if (isNaN(n) || n < 1 || n > 5) throw new Error('Điểm món phải từ 1 đến 5');
+      it.rating = n;
+    }
+    if (x.dish_id) {
+      const d = dMap[x.dish_id];
+      if (!d) throw new Error('Không tìm thấy món ' + x.dish_id + ' trong sổ');
+      it.dish_id = d.id; it.dish_name = d.name;
+    } else {
+      const nd = Object.assign({}, x.newDish);
+      nd.name = String(nd.name).trim();
+      nd.category = checkCategory_('dishes', nd.category);
+      it.newDish = nd;
+    }
+    return it;
+  });
+}
+
+/** Gán các món vào quán (RestaurantDishes) nếu chưa có; có nhập giá mà liên kết đang trống giá thì điền vào. */
+function linkMealDishes_(restaurantId, items) {
+  const links = readAll_('restaurantDishes').filter((l) => l.restaurant_id === restaurantId);
+  items.forEach((x) => {
+    const l = links.filter((y) => y.dish_id === x.dish_id)[0];
+    if (!l) links.push(insert_('restaurantDishes', { restaurant_id: restaurantId, dish_id: x.dish_id, price: x.price }));
+    else if (x.price !== '' && !isNum_(l.price)) update_('restaurantDishes', l.id, { price: x.price });
+  });
+}
+
+/** dish_rating của món tại quán = trung bình điểm món đó trong MealDishes các bữa (chưa xóa) ở quán này. */
+function recalcDishRatings_(restaurantId, dishIds) {
+  const mealIds = {};
+  readAll_('meals').forEach((m) => { if (m.restaurant_id === restaurantId) mealIds[m.id] = true; });
+  const sum = {};
+  safeReadAll_('mealDishes').forEach((x) => {
+    if (!mealIds[x.meal_id] || dishIds.indexOf(x.dish_id) < 0 || !isNum_(x.rating)) return;
+    const s = sum[x.dish_id] || (sum[x.dish_id] = { t: 0, n: 0 });
+    s.t += Number(x.rating); s.n++;
+  });
+  readAll_('restaurantDishes').forEach((l) => {
+    if (l.restaurant_id !== restaurantId || !sum[l.dish_id]) return;
+    update_('restaurantDishes', l.id, { dish_rating: round1_(sum[l.dish_id].t / sum[l.dish_id].n) });
+  });
+}
+
 function contextForSave_(c) {
   if (!c) return null;
   if (Array.isArray(c.keys)) {
@@ -1439,8 +1565,16 @@ function getMeals_(p) {
   let meals = readAll_('meals');
   if (p.from) meals = meals.filter((m) => m.date >= p.from);
   if (p.to) meals = meals.filter((m) => m.date <= p.to);
-  meals.sort((a, b) => String(b.date + b.created_at).localeCompare(String(a.date + a.created_at)));
-  return p.limit ? meals.slice(0, Number(p.limit)) : meals;
+  // Mới nhất trước; cùng ngày giờ (created_at chỉ tới giây) thì dòng ghi sau đứng trước.
+  meals.forEach((m, i) => { m._row = i; });
+  meals.sort((a, b) => String(b.date + b.created_at).localeCompare(String(a.date + a.created_at)) || b._row - a._row);
+  meals.forEach((m) => { delete m._row; });
+  if (p.limit) meals = meals.slice(0, Number(p.limit));
+  // Kèm danh sách món đã thử của từng bữa (bữa cũ: mảng rỗng).
+  const byMeal = {};
+  mealDishesOf_(meals).forEach((x) => { (byMeal[x.meal_id] = byMeal[x.meal_id] || []).push(x); });
+  meals.forEach((m) => { m.dishes = byMeal[m.id] || []; });
+  return meals;
 }
 
 // ───────────────────────── THỐNG KÊ ─────────────────────────
@@ -1464,10 +1598,19 @@ function getStats_(p) {
     + inMonth.filter((m) => m.is_new_place && !m.restaurant_id).length;
 
   // Món ăn lại nhiều nhất.
+  // Mỗi bữa tính 1 lần cho mỗi món: món chính + các món đã thử (MealDishes).
   const dishCount = {};
+  const triedByMeal = {};
+  mealDishesOf_(inMonth).forEach((x) => { (triedByMeal[x.meal_id] = triedByMeal[x.meal_id] || []).push(x); });
   inMonth.forEach((m) => {
-    const key = m.dish_name || (dMap[m.dish_id] && dMap[m.dish_id].name);
-    if (key) dishCount[key] = (dishCount[key] || 0) + 1;
+    const names = {};
+    const main = m.dish_name || (dMap[m.dish_id] && dMap[m.dish_id].name);
+    if (main) names[main] = true;
+    (triedByMeal[m.id] || []).forEach((x) => {
+      const n = x.dish_name || (dMap[x.dish_id] && dMap[x.dish_id].name);
+      if (n) names[n] = true;
+    });
+    Object.keys(names).forEach((k) => { dishCount[k] = (dishCount[k] || 0) + 1; });
   });
   const topDishes = Object.keys(dishCount).map((k) => ({ name: k, times: dishCount[k] }))
     .sort((a, b) => b.times - a.times).slice(0, 5);
@@ -1866,6 +2009,9 @@ function testApi() {
   }
   console.log('Thống kê tháng này: %s', JSON.stringify(getStats_({})).slice(0, 500));
 
+  // Lưu kỷ niệm kiểu mới (4 điểm quán + món đã thử, có 1 món mới) rồi dọn sạch.
+  testSaveMeal_();
+
   // Gợi ý nhanh theo ngữ cảnh: so sánh phân bố món của 3 kịch bản với không có ngữ cảnh.
   const yr = today_().slice(0, 4);
   const scenarios = [
@@ -1882,6 +2028,51 @@ function testApi() {
       console.log('   gợi ý nhanh: %s · lý do: %s', q.dish ? q.dish.name : '—', q.reasons.join(' | '));
     }
   });
+}
+
+/** Thử saveMeal với 4 điểm quán + 1 món có sẵn + 1 món mới, in kết quả rồi XÓA SẠCH những gì vừa tạo
+ *  và trả lại dish_rating cũ, để chạy trên Sheet thật cũng không để lại dữ liệu thử. */
+function testSaveMeal_() {
+  const data = bootstrap_();
+  const r = data.restaurants[0];
+  const old = data.dishes[0];
+  if (!r || !old) { console.log('saveMeal: cần ít nhất 1 quán và 1 món để thử'); return null; }
+  const linksBefore = readAll_('restaurantDishes').filter((l) => l.restaurant_id === r.id);
+  const created = { meal: null, mealDishes: [], dish: null, links: [] };
+  try {
+    const m = saveMeal_({
+      meal: { source: 'self', restaurant_id: r.id, quality: 5, price_score: 4, space: 3, service: 4, feeling: '[Thử testApi]' },
+      dishes: [
+        { dish_id: old.id, rating: 4, note: 'món có sẵn' },
+        { newDish: { name: '[Thử testApi] Món mới', category: old.category || '', cay: true }, rating: 5, note: 'món mới' }
+      ]
+    });
+    created.meal = m.id;
+    created.mealDishes = m.dishes.map((x) => x.id);
+    created.dish = m.dishes[1].dish_id;
+    created.links = readAll_('restaurantDishes').filter((l) => l.restaurant_id === r.id
+      && !linksBefore.some((b) => b.id === l.id)).map((l) => l.id);
+    const after = bootstrap_();
+    const link = (id) => after.restaurantDishes.filter((l) => l.restaurant_id === r.id && l.dish_id === id)[0];
+    console.log('saveMeal mới: điểm bữa %s (TB 4 tiêu chí 5/4/3/4) · quán %s: điểm %s, TB tiêu chí %s',
+      m.rating, r.name, after.restaurants.filter((x) => x.id === r.id)[0].score,
+      JSON.stringify(after.restaurants.filter((x) => x.id === r.id)[0].meal_avg));
+    console.log('   món đã thử: %s', m.dishes.map((x) => x.dish_name + ' ' + x.rating + '★').join(', '));
+    console.log('   gán vào quán: %s (dish_rating %s) · %s (dish_rating %s) · getMeals trả %s món',
+      old.name, link(old.id) ? link(old.id).dish_rating : '—', '[Thử testApi] Món mới',
+      link(created.dish) ? link(created.dish).dish_rating : '—',
+      getMeals_({ limit: 50 }).filter((x) => x.id === m.id)[0].dishes.length);
+    return m;
+  } finally {
+    // Dọn: xóa hẳn các dòng vừa tạo, trả dish_rating của các liên kết cũ về như trước.
+    const hardDelete = (table, id) => { const sh = sheet_(table); const row = findRow_(sh, id); if (row > 0) sh.deleteRow(row); };
+    created.mealDishes.forEach((id) => hardDelete('mealDishes', id));
+    if (created.meal) hardDelete('meals', created.meal);
+    created.links.forEach((id) => hardDelete('restaurantDishes', id));
+    if (created.dish) hardDelete('dishes', created.dish);
+    linksBefore.forEach((l) => update_('restaurantDishes', l.id, { dish_rating: l.dish_rating == null ? '' : l.dish_rating }));
+    console.log('   (đã dọn dữ liệu thử)');
+  }
 }
 
 /** Chạy chọn món n lần (không hỏi A/B) để xem ngữ cảnh làm nghiêng phân bố thế nào.

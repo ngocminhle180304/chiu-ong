@@ -73,13 +73,14 @@ App sẽ có icon riêng và mở toàn màn hình. Lần đầu bấm **Gợi �
 - **Phân loại**: vào **Cài đặt > Phân loại quán & món** để thêm, đổi tên, sắp xếp hoặc xóa. Ô *Phân loại* khi thêm quán/món chỉ cho chọn trong danh sách này. Xóa phân loại đang dùng thì app hỏi chuyển các quán/món đó sang phân loại nào.
 - **Điểm quán**: chấm 4 tiêu chí 0–5 (Chất lượng, Giá, Không gian, Phục vụ). App tự tính *Điểm chung*, không nhập tay. Ô *Giá (đồng)* vẫn là khoảng giá tiền thật.
 - **Đặc điểm món**: chia 4 nhóm (Vị, Dạng món, Nền ẩm thực, Thành phần chính), lấy từ các cột của sheet **Dishes**.
+- **Ghi kỷ niệm**: màn lưu bữa ăn có 3 phần: **Quán** (chấm 4 tiêu chí cho riêng bữa đó) → **Món đã thử** (bấm “Thêm món”, chọn món có sẵn hoặc tạo món mới, mỗi món chấm 1–5 sao kèm ghi chú) → **Cảm nhận** (ảnh, vị, cảm nhận). Điểm quán trong sổ là trung bình các bữa đã ăn; món chưa có ở quán thì tự gán vào quán.
 - **Câu hỏi**: thêm hoặc sửa ở sheet **Questions**. Luật lọc viết dạng `cay=TRUE`, nhiều điều kiện thì nối bằng `;`.
 - **Thử trước khi tặng**: mở app ở tab ẩn danh để thấy đúng trải nghiệm lần đầu của Cá, kể cả màn lời chúc.
 
 ## 6. Khi sửa code
 
 - Sửa backend: cập nhật **cả** bản trong Apps Script (rồi *Deploy > Manage deployments > New version*) **lẫn** `backend/Code.gs` trên GitHub.
-- Sửa giao diện: đổi `VERSION` trong `sw.js`, `APP_VERSION` trong `js/app.js` và số `?v=` trong `index.html` (ví dụ `leeming-v9` / `?v=9`) để điện thoại tải bản mới ngay. Phiên bản đang chạy hiện ở cuối màn Cài đặt.
+- Sửa giao diện: đổi `VERSION` trong `sw.js`, `APP_VERSION` trong `js/app.js` và số `?v=` trong `index.html` (ví dụ `leeming-v10` / `?v=10`) để điện thoại tải bản mới ngay. Phiên bản đang chạy hiện ở cuối màn Cài đặt.
 - `js/gas-shim.js` chỉ giả lập các dịch vụ của Google (Sheet, Drive, Utilities…). Logic thật (gợi ý, điểm quán, phân loại, migration) nằm hết trong `backend/Code.gs` và được app nạp nguyên file, nên sửa `Code.gs` là chế độ dùng thử cũng chạy theo.
 
 ## 7. Nâng cấp lên V2 (phân loại cố định, 4 điểm quán, thuộc tính món theo nhóm)
@@ -87,6 +88,12 @@ App sẽ có icon riêng và mở toàn màn hình. Lần đầu bấm **Gợi �
 1. Làm phần backend theo mục *Nâng cấp từ bản cũ lên V2* trong `backend/HUONG_DAN.md`: dán `Code.gs` mới → `setupSheets` → `migrateSchemaV2` → deploy **New version**.
 2. Đưa toàn bộ frontend mới lên GitHub (`index.html`, `css/`, `js/`, `sw.js`, `backend/Code.gs`). `sw.js` đã lên `leeming-v2` nên điện thoại sẽ tải bản mới.
 3. Chế độ dùng thử trên máy nào còn dữ liệu mẫu cũ thì app tự nâng cấp dữ liệu đó khi mở lên.
+
+## 9. Cập nhật bản Đánh giá theo bữa
+
+1. Backend: dán `Code.gs` mới → chạy lại `setupSheets` (tạo sheet **MealDishes**, thêm 4 cột điểm vào **Meals**) → deploy **New version**. Chi tiết ở `backend/HUONG_DAN.md`.
+2. Frontend: merge lên GitHub. Phiên bản trong Cài đặt sẽ là `leeming-v9`.
+3. Nên cập nhật backend trước khi dùng. Apps Script còn bản cũ thì bữa ăn vẫn lưu được, nhưng 4 điểm quán và món đã thử sẽ bị bỏ qua, không báo lỗi. Đã dán `Code.gs` mới mà chưa chạy `setupSheets` thì lưu bữa có món sẽ báo thiếu sheet MealDishes.
 
 ## 8. Cập nhật bản Gợi ý theo ngữ cảnh
 

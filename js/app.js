@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = 'leeming-v8'; // đổi cùng VERSION trong sw.js
+  var APP_VERSION = 'leeming-v9'; // đổi cùng VERSION trong sw.js
   var CFG = window.APP_CONFIG || {};
   var DEMO = !CFG.API_URL;
   var WRITE_ACTIONS = { create: 1, update: 1, remove: 1, linkDishes: 1, saveSession: 1, saveMeal: 1 };
@@ -144,16 +144,26 @@
     Object.keys(w).forEach(function (k) { if (hasScore(r[k])) { sum += w[k] * Number(r[k]); tw += w[k]; } });
     return tw ? Math.round(sum / tw * 100) / 100 : null;
   }
+  /** 4 điểm con của quán: ưu tiên trung bình các bữa đã ăn (meal_avg), chưa có thì dùng điểm nhập tay. */
   function subScores(r) {
-    return SCORE_KEYS.filter(function (k) { return hasScore(r[k]); }).map(function (k) { return scoreLabel(k) + ' ' + fmtScore(r[k]); }).join(' · ');
+    var v = function (k) { return r.meal_avg && hasScore(r.meal_avg[k]) ? r.meal_avg[k] : r[k]; };
+    return SCORE_KEYS.filter(function (k) { return hasScore(v(k)); }).map(function (k) { return scoreLabel(k) + ' ' + fmtScore(v(k)); }).join(' · ');
   }
-  function shopScore(r) { return r.rating != null ? r.rating : r.score; }
-  function scoreFields(r) {
+  /** Điểm quán: trung bình các bữa đã ăn (score), quán chưa có bữa nào thì là rating nhập tay. */
+  function shopScore(r) { return r.score != null ? r.score : r.rating; }
+  function fmtStar(n) { return String(Math.round(Number(n) * 10) / 10).replace('.', ','); }
+  function calcMean(r) {
+    var ks = SCORE_KEYS.filter(function (k) { return hasScore(r[k]); });
+    return ks.length ? Math.round(ks.reduce(function (t, k) { return t + Number(r[k]); }, 0) / ks.length * 100) / 100 : null;
+  }
+  /** Khối chấm 4 tiêu chí. opts.meal: điểm quán trong 1 bữa (điểm bữa = trung bình cộng), không phải điểm cả quá trình. */
+  function scoreFields(r, opts) {
+    var meal = !!(opts && opts.meal);
     var w = S.data.ratingWeights || {};
-    var formula = Object.keys(w).sort(function (a, b) { return w[b] - w[a]; })
+    var formula = meal ? 'trung bình cộng các tiêu chí có điểm' : Object.keys(w).sort(function (a, b) { return w[b] - w[a]; })
       .map(function (k) { return Math.round(w[k] * 100) + '% ' + scoreLabel(k); }).join(' + ');
-    var overall = calcRating(r);
-    return '<div class="field"><span class="label">Chấm điểm quán</span>' +
+    var overall = meal ? calcMean(r) : calcRating(r);
+    return '<div class="field"><span class="label">' + (meal ? 'Quán bữa này thế nào?' : 'Chấm điểm quán') + '</span>' +
       '<span class="small muted">Kéo từ 0 đến 5, bước 0,5. Chưa biết thì để trống.</span><div class="scores">' +
       SCORE_KEYS.map(function (k) {
         var has = hasScore(r[k]);
@@ -162,8 +172,8 @@
           '<output for="sc-' + k + '">' + (has ? fmtScore(r[k]) : '–') + '</output>' +
           '<button type="button" class="clear" data-act="clearScore" data-k="' + k + '" aria-label="Bỏ điểm ' + esc(scoreLabel(k)) + '">' + I.close + '</button></div>';
       }).join('') + '</div>' +
-      '<div class="overall"><span>Điểm chung</span><b data-overall>' + (overall == null ? '–' : fmtScore(overall)) + '</b></div>' +
-      (formula ? '<span class="small muted">= ' + esc(formula) + '. Thiếu tiêu chí nào thì chia lại theo các tiêu chí còn lại.</span>' : '') + '</div>';
+      '<div class="overall"><span>' + (meal ? 'Điểm bữa này' : 'Điểm chung') + '</span><b data-overall' + (meal ? ' data-mode="mean"' : '') + '>' + (overall == null ? '–' : fmtScore(overall)) + '</b></div>' +
+      (formula ? '<span class="small muted">= ' + esc(formula) + (meal ? '. Điểm quán trong sổ là trung bình các bữa đã ăn ở quán.' : '. Thiếu tiêu chí nào thì chia lại theo các tiêu chí còn lại.') + '</span>' : '') + '</div>';
   }
   function readScores(form, into) {
     SCORE_KEYS.forEach(function (k) {
@@ -175,7 +185,8 @@
   function refreshOverall(form) {
     var b = form.querySelector('[data-overall]');
     if (!b) return;
-    var r = calcRating(readScores(form, {}));
+    var sc = readScores(form, {});
+    var r = b.dataset.mode === 'mean' ? calcMean(sc) : calcRating(sc);
     b.textContent = r == null ? '–' : fmtScore(r);
   }
   function byName(a, b) { return String(a.name).localeCompare(String(b.name), 'vi'); }
@@ -320,7 +331,7 @@
       // Dữ liệu dùng thử tạo từ bản cũ: nâng cấp tại chỗ giống như chạy migrateSchemaV2() trên Sheet thật.
       if (!SpreadsheetApp.getActive().getSheetByName('Categories')) { migrateSchemaV2(); GasDemo.save(); }
       // Bản có ngữ cảnh: chạy lại setupSheets như trên Sheet thật (thêm sheet/cột/khóa còn thiếu, giữ dữ liệu).
-      if (!SpreadsheetApp.getActive().getSheetByName('ContextRules')) { setupSheets(); GasDemo.save(); }
+      if (!SpreadsheetApp.getActive().getSheetByName('ContextRules') || !SpreadsheetApp.getActive().getSheetByName('MealDishes')) { setupSheets(); GasDemo.save(); }
       return;
     }
     setupSheets();
@@ -344,7 +355,11 @@
     ].forEach(function (m) {
       var rej = d.dishes.slice(0, m[6]).map(function (x) { return x.id; });
       var s = saveSession_({ started_at: ago(m[0]) + 'T19:00:00+07:00', answers: [], rejected: rej });
-      saveMeal_({ meal: { date: ago(m[0]), session_id: s.id, source: 'suggested', restaurant_id: R(m[1]).id, dish_id: D(m[2]).id, rating: m[3], tastes: m[4], feeling: m[5], context_tags: m[7] } });
+      saveMeal_({
+        meal: { date: ago(m[0]), session_id: s.id, source: 'suggested', restaurant_id: R(m[1]).id, dish_id: D(m[2]).id, tastes: m[4], feeling: m[5], context_tags: m[7],
+          quality: m[3], price_score: 4, space: 3.5, service: m[3] >= 4 ? 4 : 3 },
+        dishes: [{ dish_id: D(m[2]).id, rating: m[3] }]
+      });
     });
     GasDemo.save();
   }
@@ -426,7 +441,7 @@
       lastHtml = '<div class="card row" style="padding:12px">' +
         '<div class="thumb">' + (src ? '<img src="' + esc(src) + '" alt="">' : I.image) + '</div>' +
         '<div class="stack grow" style="gap:4px"><strong>' + esc([last.dish_name, last.restaurant_name].filter(Boolean).join(' · ')) + '</strong>' +
-        '<span class="small muted">' + esc(fmtDate(last.date)) + (last.rating ? ' · ' + last.rating + ' sao' : '') + '</span>' +
+        '<span class="small muted">' + esc(fmtDate(last.date)) + (last.rating ? ' · ' + fmtStar(last.rating) + ' sao' : '') + '</span>' +
         (last.feeling ? '<span class="small" style="font-style:italic">“' + esc(last.feeling) + '”</span>' : '') + '</div></div>';
     } else {
       lastHtml = '<div class="card small muted">' + (S.home.loaded ? 'Chưa có bữa nào được ghi lại. Đi ăn thôi!' : 'Đang tải…') + '</div>';
@@ -837,38 +852,110 @@
     var placeFields = '';
     if (self) {
       var shops = S.data.restaurants.slice().sort(byName);
-      var dishes = S.data.dishes.slice().sort(byName);
       placeFields =
         '<div class="field"><label for="m-place">Quán</label><select class="select" id="m-place" name="place" data-change="placeSel">' +
         '<option value="__new">＋ Quán mới, chưa có trong sổ</option>' +
-        shops.map(function (r) { return '<option value="' + esc(r.id) + '">' + esc(r.name) + '</option>'; }).join('') + '</select></div>' +
-        '<div class="stack" id="new-place">' +
+        shops.map(function (r) { return '<option value="' + esc(r.id) + '"' + (m.placeId === r.id ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join('') + '</select></div>' +
+        '<div class="stack" id="new-place"' + (m.placeId && m.placeId !== '__new' ? ' hidden' : '') + '>' +
         '<div class="field"><label for="m-name">Tên quán mới</label><input class="input" id="m-name" name="placeName" placeholder="Quán gì đó ngon ngon"></div>' +
         '<div class="field"><label for="m-addr">Địa chỉ</label><input class="input" id="m-addr" name="placeAddr" placeholder="Không bắt buộc"></div>' +
-        categoryField('restaurant', '', 'm-cat') + scoreFields({}) +
-        '<label class="row small" style="gap:8px"><input type="checkbox" name="useLoc" checked style="width:20px;height:20px;accent-color:var(--accent)"> Lưu vị trí hiện tại làm vị trí quán</label></div>' +
-        '<div class="field"><label for="m-dish">Món</label><select class="select" id="m-dish" name="dish" data-change="dishSel">' +
-        '<option value="">— Chọn món —</option>' +
-        dishes.map(function (x) { return '<option value="' + esc(x.id) + '"' + (m.dish && m.dish.id === x.id ? ' selected' : '') + '>' + esc(x.name) + '</option>'; }).join('') +
-        '<option value="__other">Món khác…</option></select></div>' +
-        '<div class="field" id="dish-other" hidden><label for="m-dname">Tên món</label><input class="input" id="m-dname" name="dishName"></div>';
+        categoryField('restaurant', '', 'm-cat') +
+        '<label class="row small" style="gap:8px"><input type="checkbox" name="useLoc" checked style="width:20px;height:20px;accent-color:var(--accent)"> Lưu vị trí hiện tại làm vị trí quán</label></div>';
     }
     return '<section class="screen">' + head +
-      '<form data-form="memo" class="stack" style="gap:16px">' + placeFields +
+      '<form data-form="memo" class="stack" style="gap:16px">' +
+      '<h2 class="section-h"><span>1</span>Quán</h2>' + placeFields + scoreFields({}, { meal: true }) +
+      '<h2 class="section-h"><span>2</span>Món đã thử</h2>' +
+      '<div class="stack" id="tried">' + triedHtml() + '</div>' +
+      '<button type="button" class="btn btn-outline" data-act="triedAdd">' + I.plus + 'Thêm món</button>' +
+      '<h2 class="section-h"><span>3</span>Cảm nhận</h2>' +
       '<label class="photo-drop" id="photo-drop">' + (m.preview ? '<img src="' + m.preview + '" alt="Ảnh bữa ăn">' : I.camera + '<span>Chụp ảnh bữa ăn</span>') +
       '<input type="file" accept="image/*" name="photo" aria-label="Chụp hoặc chọn ảnh bữa ăn"></label>' +
-      '<div class="field"><span class="label">Chấm điểm</span>' + starsInput('rating', 0) + '</div>' +
       '<div class="field"><span class="label">Hôm nay vị thế nào?</span><div class="chips">' +
       tasteChips().map(function (t) { return '<label class="toggle"><input type="checkbox" name="taste" value="' + esc(t) + '"><span>' + esc(t) + '</span></label>'; }).join('') + '</div></div>' +
       '<div class="field"><label for="m-feel">Cảm nhận</label><textarea class="textarea" id="m-feel" name="feeling" placeholder="Nước dùng ngọt, quán đông, lần sau đi sớm hơn…"></textarea></div>' +
       '<button class="btn btn-primary btn-block" type="submit">Lưu kỷ niệm</button></form></section>';
   }
 
+  // ── Món đã thử trong bữa ──
+  /** Quán đang chọn trong màn kỷ niệm ('' nếu là quán mới). */
+  function memoPlaceId() {
+    var m = S.memo;
+    if (m.mode !== 'self') return m.restaurant.id;
+    var sel = $('#m-place');
+    var v = sel ? sel.value : (m.placeId || '__new');
+    return v === '__new' ? '' : v;
+  }
+  function dishLinked(placeId, dishId) {
+    return !!placeId && S.data.restaurantDishes.some(function (l) { return l.restaurant_id === placeId && l.dish_id === dishId; });
+  }
+  function triedHtml() {
+    var list = S.memo.dishes; var placeId = memoPlaceId();
+    if (!list.length) return '<span class="small muted">Chưa có món nào. Bấm “Thêm món” để chấm điểm từng món ' + esc(user()) + ' đã thử.</span>';
+    return list.map(function (t, i) {
+      var stars = '';
+      for (var n = 1; n <= 5; n++) {
+        stars += '<button type="button" class="mini-star' + (n <= (t.rating || 0) ? ' on' : '') + '" data-act="triedStar" data-i="' + i + '" data-v="' + n + '" aria-label="' + n + ' sao" aria-pressed="' + (n === t.rating) + '">' + I.starInput + '</button>';
+      }
+      var needPrice = t.newDish || !dishLinked(placeId, t.dish_id);
+      return '<div class="card tried"><div class="row" style="justify-content:space-between"><strong class="grow">' + esc(t.name) +
+        (t.newDish ? ' <span class="badge badge-soft">món mới</span>' : '') + '</strong>' +
+        '<button type="button" class="icon-btn sm danger" data-act="triedDel" data-i="' + i + '" aria-label="Bỏ món ' + esc(t.name) + '">' + I.close + '</button></div>' +
+        '<div class="mini-stars" role="group" aria-label="Điểm món">' + stars + '</div>' +
+        '<input class="input sm" data-tried="note" data-i="' + i + '" value="' + esc(t.note || '') + '" placeholder="Ghi chú ngắn, vd: hơi mặn" aria-label="Ghi chú ' + esc(t.name) + '">' +
+        (needPrice ? '<input class="input sm" type="number" inputmode="numeric" step="1000" min="0" data-tried="price" data-i="' + i + '" value="' + esc(t.price || '') + '" placeholder="Giá ở quán này (không bắt buộc)" aria-label="Giá ' + esc(t.name) + '">' +
+          '<span class="small muted">' + (placeId ? 'Món này chưa có trong quán, ' + esc(bot()) + ' sẽ gán luôn khi lưu.' : 'Sẽ gán vào quán mới khi lưu.') + '</span>' : '') +
+        '</div>';
+    }).join('');
+  }
+  function initialTried(dish) { return dish ? [{ dish_id: dish.id, name: dish.name, rating: 0, note: '', price: '' }] : []; }
+  function renderTried() { var box = $('#tried'); if (box) box.innerHTML = triedHtml(); }
+  function addTried(item) {
+    var list = S.memo.dishes;
+    if (item.dish_id && list.some(function (t) { return t.dish_id === item.dish_id; })) { toast('Món này có trong danh sách rồi'); return; }
+    list.push(Object.assign({ rating: 0, note: '', price: '' }, item));
+    closeModal(); renderTried();
+  }
+  /** Bottom sheet "+ Thêm món": tab Món có sẵn (tìm kiếm) và Món mới (dùng lại form món). */
+  function openDishSheet(tab, q) {
+    var sh = S.memo.sheet = { tab: tab || 'pick', q: q || '' };
+    var tabs = '<div class="segmented" role="tablist">' +
+      '<button role="tab" aria-selected="' + (sh.tab === 'pick') + '" class="' + (sh.tab === 'pick' ? 'on' : '') + '" data-act="sheetTab" data-t="pick">Món có sẵn</button>' +
+      '<button role="tab" aria-selected="' + (sh.tab === 'new') + '" class="' + (sh.tab === 'new' ? 'on' : '') + '" data-act="sheetTab" data-t="new">Món mới</button></div>';
+    var body = sh.tab === 'pick'
+      ? '<div class="search">' + I.search + '<label class="sr-only" for="dq">Tìm món</label><input id="dq" type="search" data-input="dishq" value="' + esc(sh.q) + '" placeholder="Tìm món…"></div>' +
+        '<div class="stack pick-list" id="dish-pick-list">' + pickListHtml() + '</div>'
+      : '<div class="stack" id="new-dish">' + dishCoreFields({}, 'nd') +
+        '<div class="field"><label for="nd-price">Giá ở quán này</label><input class="input" id="nd-price" type="number" inputmode="numeric" step="1000" min="0" placeholder="Không bắt buộc"></div>' +
+        '<button type="button" class="btn btn-primary btn-block" data-act="triedNew">Thêm món này</button></div>';
+    openModal('<div class="row" style="justify-content:space-between"><h2 class="h2">Thêm món đã thử</h2>' +
+      '<button type="button" class="icon-btn sm" data-act="modalClose" aria-label="Đóng">' + I.close + '</button></div>' + tabs + body);
+    var input = $('#dq'); if (input && sh.tab === 'pick') { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+  }
+  function pickListHtml() {
+    var q = norm(S.memo.sheet.q); var placeId = memoPlaceId();
+    var picked = {}; S.memo.dishes.forEach(function (t) { if (t.dish_id) picked[t.dish_id] = true; });
+    var list = S.data.dishes.filter(function (d) { return !q || norm(d.name).indexOf(q) >= 0 || norm(d.category).indexOf(q) >= 0; })
+      .sort(function (a, b) { return (dishLinked(placeId, b.id) - dishLinked(placeId, a.id)) || byName(a, b); });
+    if (!list.length) return '<span class="small muted">Không thấy món nào. Qua tab “Món mới” để thêm nha.</span>';
+    return list.map(function (d) {
+      var meta = [d.category, dishLinked(placeId, d.id) ? 'có ở quán này' : ''].filter(Boolean).join(' · ');
+      return '<button type="button" class="card list-item pick" data-act="triedPick" data-id="' + esc(d.id) + '"' + (picked[d.id] ? ' disabled' : '') + '>' +
+        '<span class="stack grow" style="gap:2px"><strong>' + esc(d.name) + '</strong>' + (meta ? '<span class="small muted">' + esc(meta) + '</span>' : '') + '</span>' +
+        (picked[d.id] ? '<span class="small muted">Đã thêm</span>' : I.plus) + '</button>';
+    }).join('');
+  }
+
   function saveMemo(form) {
     var m = S.memo; var fd = new FormData(form);
     var btn = form.querySelector('[type=submit]');
-    var meal = { source: m.mode === 'self' ? 'self' : 'suggested', rating: Number(fd.get('rating')) || '', tastes: fd.getAll('taste'), feeling: String(fd.get('feeling') || '').trim() };
-    var payload = { meal: meal };
+    var meal = readScores(form, { source: m.mode === 'self' ? 'self' : 'suggested', tastes: fd.getAll('taste'), feeling: String(fd.get('feeling') || '').trim() });
+    var payload = {
+      meal: meal,
+      dishes: m.dishes.map(function (t) {
+        return { dish_id: t.dish_id, newDish: t.newDish, rating: t.rating || '', note: String(t.note || '').trim(), price: t.price || '' };
+      })
+    };
     var prep = Promise.resolve();
     if (m.mode === 'suggested') {
       meal.restaurant_id = m.restaurant.id; meal.dish_id = m.dish.id;
@@ -877,14 +964,13 @@
       if (place === '__new') {
         var name = String(fd.get('placeName') || '').trim();
         if (!name) { toast('Cá ghi tên quán giúp ' + bot() + ' nha', true); $('#m-name').focus(); return; }
-        payload.newRestaurant = readScores(form, { name: name, address: String(fd.get('placeAddr') || '').trim(), category: String(fd.get('category') || '') });
+        // Điểm của quán mới lấy luôn từ điểm bữa này (backend tự điền).
+        payload.newRestaurant = { name: name, address: String(fd.get('placeAddr') || '').trim(), category: String(fd.get('category') || '') };
         if (fd.get('useLoc')) prep = getPos(true).then(function (pos) { if (pos) { payload.newRestaurant.lat = pos.lat; payload.newRestaurant.lng = pos.lng; } });
       } else {
         meal.restaurant_id = place;
       }
-      var dish = fd.get('dish');
-      if (dish === '__other') meal.dish_name = String(fd.get('dishName') || '').trim();
-      else if (dish) meal.dish_id = dish;
+      if (m.dish && m.dishes.some(function (t) { return t.dish_id === m.dish.id; })) meal.dish_id = m.dish.id;
     }
     if (m.photo) payload.photo = m.photo;
     var flow = S.ask || S.quick;
@@ -927,9 +1013,14 @@
           var src = photoSrc(m);
           var tastes = String(m.tastes || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
           return '<article class="card memory">' + (src ? '<img src="' + esc(src) + '" alt="Ảnh ' + esc(m.dish_name || 'bữa ăn') + '" loading="lazy">' : '') +
-            '<div class="body"><strong>' + esc([m.dish_name, m.restaurant_name].filter(Boolean).join(' · ') || 'Bữa ăn') + '</strong>' +
+            '<div class="body"><strong>' + esc((m.dishes && m.dishes.length > 1 ? [m.restaurant_name] : [m.dish_name, m.restaurant_name]).filter(Boolean).join(' · ') || 'Bữa ăn') + '</strong>' +
             '<span class="small muted">' + esc(fmtDate(m.date)) + (m.source === 'self' ? ' · tự tìm' : '') + (m.is_new_place ? ' · quán mới' : '') + '</span>' +
-            (m.rating ? starsText(m.rating) : '') +
+            (m.rating ? '<span class="row" style="gap:8px">' + starsText(m.rating) + '<b>' + fmtStar(m.rating) + '</b></span>' : '') +
+            (subScores(m) ? '<span class="small muted">Quán bữa này: ' + esc(subScores(m)) + '</span>' : '') +
+            (m.dishes && m.dishes.length ? '<div class="tried-list">' + m.dishes.map(function (x) {
+              return '<div class="tried-item"><span class="grow"><b>' + esc(x.dish_name) + '</b>' + (x.note ? ' <span class="muted">· ' + esc(x.note) + '</span>' : '') + '</span>' +
+                (hasScore(x.rating) ? '<span class="rating" style="font-size:13px">' + I.star + fmtStar(x.rating) + '</span>' : '') + '</div>';
+            }).join('') + '</div>' : '') +
             (tastes.length ? '<div class="chips">' + tastes.map(function (t) { return '<span class="chip">' + esc(t) + '</span>'; }).join('') + '</div>' : '') +
             (m.feeling ? '<span class="feel">“' + esc(m.feeling) + '”</span>' : '') + '</div></article>';
         }).join('');
@@ -1015,6 +1106,8 @@
       '<input class="input" type="number" inputmode="numeric" step="1000" min="0" name="price_min" aria-label="Giá thấp nhất" placeholder="Từ, vd 40000" value="' + v('price_min') + '">' +
       '<input class="input" type="number" inputmode="numeric" step="1000" min="0" name="price_max" aria-label="Giá cao nhất" placeholder="Đến, vd 70000" value="' + v('price_max') + '"></div></div>' +
       scoreFields(r) +
+      (!isNew && r.visit_count && r.meal_rating_avg != null ? '<div class="note">Qua ' + r.visit_count + ' bữa đã ăn, điểm thực tế của quán là <b>' + fmtStar(r.meal_rating_avg) + '</b>' +
+        (subScores(r) ? ' (' + esc(subScores(r)) + ')' : '') + '. Sổ dùng điểm này, điểm nhập tay ở trên chỉ dùng khi quán chưa có bữa nào.</div>' : '') +
       '<div class="field"><label for="s-cmt">Nhận xét</label><textarea class="textarea" id="s-cmt" name="comment">' + v('comment') + '</textarea></div>' +
       '<div class="field"><span class="label">Quán có bán món</span>' +
       (dishes.length ? '<div class="dish-pick">' + dishes.map(function (d) {
@@ -1070,15 +1163,7 @@
     }).filter(Boolean);
     var v = function (k) { return d[k] == null ? '' : esc(d[k]); };
     return '<section class="screen">' + topbar('#/book', isNew ? 'Thêm vào sổ' : 'Sửa món', isNew ? 'Món mới' : d.name) +
-      '<form data-form="dish" class="stack" style="gap:16px">' +
-      '<div class="field"><label for="d-name">Tên món *</label><input class="input" id="d-name" name="name" required value="' + v('name') + '"></div>' +
-      categoryField('dish', d.category, 'd-cat') +
-      '<div class="field"><span class="label">Đặc điểm</span><span class="small muted">Chọn hết những gì đúng với món này — ' + esc(bot()) + ' dựa vào đây để hỏi A/B.</span>' +
-      attrGroups().map(function (g) {
-        return '<div class="attr-group"><span class="group-label">' + esc(g.label) + '</span><div class="chips">' + g.attrs.map(function (a) {
-          return '<label class="toggle sm"><input type="checkbox" name="attr" value="' + esc(a.key) + '"' + (d[a.key] === true ? ' checked' : '') + '><span>' + esc(a.label) + '</span></label>';
-        }).join('') + '</div></div>';
-      }).join('') + '</div>' +
+      '<form data-form="dish" class="stack" style="gap:16px">' + dishCoreFields(d, 'd') +
       '<div class="field"><label for="d-img">Link ảnh món</label><input class="input" id="d-img" name="image_url" type="url" value="' + v('image_url') + '" placeholder="Không bắt buộc"></div>' +
       '<div class="field"><label for="d-note">Ghi chú</label><textarea class="textarea" id="d-note" name="note">' + v('note') + '</textarea></div>' +
       (isNew ? '' : '<div class="field"><span class="label">Có ở quán</span>' + (shops.length ? '<div class="chips">' + shops.map(function (s) { return '<span class="chip">' + esc(s) + '</span>'; }).join('') + '</div>' : '<span class="small muted">Chưa gán quán nào. Mở quán trong sổ để gán món.</span>') + '</div>') +
@@ -1086,12 +1171,30 @@
       (isNew ? '' : '<button type="button" class="btn btn-danger btn-block" data-act="delDish">Xóa món khỏi sổ</button>') +
       '</form></section>';
   }
+  /** Tên + phân loại + đặc điểm món: dùng chung cho form Món và form "Món mới" khi lưu kỷ niệm. */
+  function dishCoreFields(d, prefix) {
+    var v = function (k) { return d[k] == null ? '' : esc(d[k]); };
+    return '<div class="field"><label for="' + prefix + '-name">Tên món *</label><input class="input" id="' + prefix + '-name" name="name" required value="' + v('name') + '"></div>' +
+      categoryField('dish', d.category, prefix + '-cat') +
+      '<div class="field"><span class="label">Đặc điểm</span><span class="small muted">Chọn hết những gì đúng với món này — ' + esc(bot()) + ' dựa vào đây để hỏi A/B.</span>' +
+      attrGroups().map(function (g) {
+        return '<div class="attr-group"><span class="group-label">' + esc(g.label) + '</span><div class="chips">' + g.attrs.map(function (a) {
+          return '<label class="toggle sm"><input type="checkbox" name="attr" value="' + esc(a.key) + '"' + (d[a.key] === true ? ' checked' : '') + '><span>' + esc(a.label) + '</span></label>';
+        }).join('') + '</div></div>';
+      }).join('') + '</div>';
+  }
+  /** Đọc tên, phân loại, đặc điểm từ một khối chứa dishCoreFields (form hoặc bottom sheet). */
+  function readDishCore(root) {
+    var val = function (n) { var el = root.querySelector('[name="' + n + '"]'); return el ? String(el.value || '').trim() : ''; };
+    var on = Array.prototype.map.call(root.querySelectorAll('input[name="attr"]:checked'), function (el) { return el.value; });
+    var data = { name: val('name'), category: val('category') };
+    (S.data.dishAttrs || []).forEach(function (a) { data[a.key] = on.indexOf(a.key) >= 0; });
+    return data;
+  }
   function saveDish(form) {
     var fd = new FormData(form);
     var isNew = S.param === 'new' || !S.param;
-    var on = fd.getAll('attr');
-    var data = { name: String(fd.get('name') || '').trim(), category: String(fd.get('category') || '').trim(), image_url: String(fd.get('image_url') || '').trim(), note: String(fd.get('note') || '').trim() };
-    (S.data.dishAttrs || []).forEach(function (a) { data[a.key] = on.indexOf(a.key) >= 0; });
+    var data = Object.assign(readDishCore(form), { image_url: String(fd.get('image_url') || '').trim(), note: String(fd.get('note') || '').trim() });
     if (!data.name) { toast('Món phải có tên nha', true); return; }
     var btn = form.querySelector('[type=submit]'); btn.disabled = true; btn.textContent = 'Đang lưu…';
     (isNew ? api('create', { table: 'dishes', data: data }) : api('update', { table: 'dishes', id: S.param, data: data }))
@@ -1334,7 +1437,8 @@
       var list = quick ? S.quick.result.restaurants.open : S.pick.result.open;
       var r = list.filter(function (x) { return x.id === el.dataset.id; })[0];
       if (quick) saveSessionBg('di_luon');
-      S.memo = { mode: 'suggested', restaurant: r, dish: quick ? S.quick.result.dish : S.pick.dish, photo: null, preview: null, back: quick ? '#/quick' : '#/places' };
+      var dish = quick ? S.quick.result.dish : S.pick.dish;
+      S.memo = { mode: 'suggested', restaurant: r, dish: dish, dishes: initialTried(dish), photo: null, preview: null, back: quick ? '#/quick' : '#/places' };
       go('#/memo');
     },
     startQuick: startQuick,
@@ -1370,12 +1474,12 @@
     selfFind: function () {
       if (S.ask || S.quick) saveSessionBg('tu_tim');
       var flow = S.ask || S.quick;
-      S.memo = { mode: 'self', dish: flow && flow.dish, photo: null, preview: null, back: S.route === 'places' ? '#/places' : (S.quick ? '#/quick' : (S.ask ? '#/ask' : '#/home')) };
+      S.memo = { mode: 'self', dish: flow && flow.dish, dishes: initialTried(flow && flow.dish), photo: null, preview: null, back: S.route === 'places' ? '#/places' : (S.quick ? '#/quick' : (S.ask ? '#/ask' : '#/home')) };
       go('#/memo');
     },
     newMemory: function () {
       S.ask = null; S.quick = null;
-      S.memo = { mode: 'self', photo: null, preview: null, back: '#/memories' };
+      S.memo = { mode: 'self', dishes: [], photo: null, preview: null, back: '#/memories' };
       go('#/memo');
     },
     bookTab: function (el) { S.book.tab = el.dataset.t; S.book.cat = 'Tất cả'; S.book.q = ''; render(); },
@@ -1460,11 +1564,34 @@
       });
     },
     modalClose: closeModal,
+    triedAdd: function () { openDishSheet('pick'); },
+    sheetTab: function (el) { openDishSheet(el.dataset.t, S.memo.sheet && S.memo.sheet.q); },
+    triedPick: function (el) {
+      var d = S.data.dishes.filter(function (x) { return x.id === el.dataset.id; })[0];
+      if (d) addTried({ dish_id: d.id, name: d.name });
+    },
+    triedNew: function () {
+      var box = $('#new-dish'); if (!box) return;
+      var data = readDishCore(box);
+      if (!data.name) { toast('Món mới phải có tên nha', true); var n = $('#nd-name'); if (n) n.focus(); return; }
+      var price = ($('#nd-price') || {}).value || '';
+      var same = S.data.dishes.filter(function (d) { return norm(d.name) === norm(data.name); })[0];
+      if (same) { toast('Sổ đã có món ' + same.name + ', ' + bot() + ' dùng luôn món đó nha'); addTried({ dish_id: same.id, name: same.name, price: price }); return; }
+      addTried({ newDish: data, name: data.name, price: price });
+    },
+    triedStar: function (el) {
+      var t = S.memo.dishes[Number(el.dataset.i)]; var v = Number(el.dataset.v);
+      if (t) { t.rating = t.rating === v ? 0 : v; renderTried(); }
+    },
+    triedDel: function (el) { S.memo.dishes.splice(Number(el.dataset.i), 1); renderTried(); },
     showSplash: function () { showSplash(true); },
     closeSplash: function (el) { var o = el.closest('.overlay'); if (o) o.remove(); }
   };
   var CHANGE = {
-    placeSel: function (el) { var box = $('#new-place'); if (box) box.hidden = el.value !== '__new'; },
+    placeSel: function (el) {
+      var box = $('#new-place'); if (box) box.hidden = el.value !== '__new';
+      if (S.memo) { S.memo.placeId = el.value; renderTried(); }
+    },
     dishSel: function (el) { var box = $('#dish-other'); if (box) box.hidden = el.value !== '__other'; },
     statMonth: function (el) { S.stats.month = el.value; S.stats.data = null; loadStats(); render(); },
     mapLink: function (el) {
@@ -1537,6 +1664,16 @@
       var el = e.target; delete el.dataset.empty;
       var out = el.parentNode.querySelector('output'); if (out) out.textContent = fmtScore(el.value);
       refreshOverall(el.form);
+      return;
+    }
+    if (e.target.dataset && e.target.dataset.input === 'dishq' && S.memo && S.memo.sheet) {
+      S.memo.sheet.q = e.target.value;
+      var pl = $('#dish-pick-list'); if (pl) pl.innerHTML = pickListHtml();
+      return;
+    }
+    if (e.target.dataset && e.target.dataset.tried && S.memo) {
+      var t = S.memo.dishes[Number(e.target.dataset.i)];
+      if (t) t[e.target.dataset.tried] = e.target.value;
       return;
     }
     if (e.target.dataset && e.target.dataset.input === 'bookq') {
