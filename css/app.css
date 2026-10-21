@@ -303,3 +303,4 @@ img { display: block; max-width: 100%; }
 .tried-list { display: flex; flex-direction: column; gap: 4px; border-top: 1px dashed var(--line-strong); padding-top: 8px; }
 .tried-item { display: flex; gap: 8px; align-items: center; font-size: 14px; }
 .mini-star:active { background: var(--sky); }
+.card.warn { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }

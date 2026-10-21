@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = 'leeming-v11'; // đổi cùng VERSION trong sw.js
+  var APP_VERSION = 'leeming-v12'; // đổi cùng VERSION trong sw.js
   var CFG = window.APP_CONFIG || {};
   var DEMO = !CFG.API_URL;
   var WRITE_ACTIONS = { create: 1, update: 1, remove: 1, linkDishes: 1, saveSession: 1, saveMeal: 1 };
@@ -239,7 +239,7 @@
       return new Promise(function (resolve, reject) {
         var out = JSON.parse(doPost({ postData: { contents: JSON.stringify({ token: 'demo', action: action, payload: payload }) } }).text);
         if (WRITE_ACTIONS[action]) GasDemo.save();
-        if (out.ok) resolve(out.data); else reject(new Error(out.error));
+        if (out.ok) resolve(out.data); else reject(new Error(friendlyError(out.error)));
       });
     }
     return fetch(CFG.API_URL, {
@@ -254,7 +254,7 @@
     }).then(function (out) {
       if (!out.ok) {
         if (/mã truy cập/i.test(out.error)) S.tokenBad = true;
-        throw new Error(out.error);
+        throw new Error(friendlyError(out.error));
       }
       return out.data;
     });
@@ -459,7 +459,7 @@
     } else {
       lastHtml = '<div class="card small muted">' + (S.home.loaded ? 'Chưa có bữa nào được ghi lại. Đi ăn thôi!' : 'Đang tải…') + '</div>';
     }
-    return '<section class="screen with-nav">' + demoBar() +
+    return '<section class="screen with-nav">' + demoBar() + backendBanner() +
       '<div class="row" style="justify-content:space-between"><div class="stack" style="gap:2px">' +
       '<span class="muted small">Chào ' + esc(user()) + ',</span>' +
       '<span class="h1">' + esc(appName()) + '</span></div>' +
@@ -475,6 +475,29 @@
       '<a class="tile" href="#/stats">' + I.chart + '<strong>Thống kê</strong><span>' + (st ? 'Tháng này ' + st.totalMeals + ' bữa' : 'Xem khẩu vị') + '</span></a></div>' +
       '<div class="stack"><h2 class="h2">Bữa gần nhất</h2>' + lastHtml + '</div>' +
       '</section>' + nav('home');
+  }
+  // ── Phiên bản Apps Script ──
+  /** Bản backend đang deploy so với Code.gs trên GitHub: {remote, local, old}. Chế độ dùng thử thì không cần. */
+  function backendStatus() {
+    if (DEMO || !S.data || typeof backendVersion_ !== 'function') return null;
+    var local = backendVersion_(); var remote = Number(S.data.backendVersion) || 0;
+    return { remote: remote, local: local, old: remote < local };
+  }
+  var DEPLOY_HOWTO = 'Mở Apps Script → xóa code cũ, dán toàn bộ backend/Code.gs mới → Save → chạy setupSheets → ' +
+    'Deploy > Manage deployments > bấm bút chì ở bản đang dùng > Version: New version > Deploy. ' +
+    'Đừng chọn “New deployment” vì sẽ ra link mới, app vẫn gọi link cũ.';
+  function backendBanner() {
+    var st = backendStatus();
+    if (!st || !st.old) return '';
+    return '<div class="card warn stack"><strong>Apps Script đang chạy bản cũ' + (st.remote ? ' (bản ' + st.remote + ', cần bản ' + st.local + ')' : '') + '</strong>' +
+      '<span class="small">Vì vậy thêm phân loại, lưu món đã thử… sẽ báo lỗi. ' + esc(DEPLOY_HOWTO) + '</span></div>';
+  }
+  /** Lỗi từ backend kèm cách sửa khi nguyên nhân là Apps Script chưa cập nhật. */
+  function friendlyError(msg) {
+    msg = String(msg || '');
+    if (/Bảng không hợp lệ|Không có action/.test(msg)) return msg + '. Apps Script đang chạy bản cũ, cần deploy bản mới (xem Cài đặt).';
+    if (/Thiếu sheet/.test(msg)) return msg.replace('Hãy chạy setupSheets().', '') + ' Mở Apps Script, chạy setupSheets rồi thử lại.';
+    return msg;
   }
   function demoBar() {
     return DEMO ? '<div class="demo-bar"><span>Chế độ dùng thử · dữ liệu mẫu</span><a href="#/settings" style="color:inherit">Tìm hiểu</a></div>' : '';
@@ -1242,7 +1265,7 @@
         '<button class="icon-btn sm" data-act="catEdit" data-id="' + esc(x.id) + '" aria-label="Đổi tên “' + esc(x.name) + '”"' + dis + '>' + I.edit + '</button>' +
         '<button class="icon-btn sm danger" data-act="catDel" data-id="' + esc(x.id) + '" aria-label="Xóa “' + esc(x.name) + '”"' + dis + '>' + I.trash + '</button></div>';
     }).join('');
-    return '<section class="screen">' + topbar(c.back || '#/settings', 'Quản lý dữ liệu', 'Phân loại') +
+    return '<section class="screen">' + topbar(c.back || '#/settings', 'Quản lý dữ liệu', 'Phân loại') + backendBanner() +
       '<div class="segmented" role="tablist">' + tab('restaurant', 'Quán') + tab('dish', 'Món') + '</div>' +
       '<form data-form="catAdd" class="row"><label class="sr-only" for="cat-new">Tên phân loại mới</label>' +
       '<input class="input grow" id="cat-new" name="name" placeholder="Thêm phân loại ' + typeWord(type) + '…" required>' +
@@ -1356,7 +1379,7 @@
   // ───────────────────────── Màn: cài đặt ─────────────────────────
   function vSettings() {
     var c = S.data.config || {};
-    return '<section class="screen">' + topbar('#/home', null, 'Cài đặt') +
+    return '<section class="screen">' + topbar('#/home', null, 'Cài đặt') + backendBanner() +
       '<div class="card stack"><h2 class="h2">' + (DEMO ? 'Đang ở chế độ dùng thử' : 'Đã kết nối Google Sheet') + '</h2>' +
       (DEMO ? '<span class="small muted">Dữ liệu mẫu chỉ lưu trên trình duyệt này. Dán Web app URL vào file js/config.js để dùng dữ liệu thật.</span>' +
         '<button class="btn btn-outline" data-act="resetDemo">Đặt lại dữ liệu mẫu</button>'
@@ -1371,7 +1394,8 @@
       '<div class="card stack"><h2 class="h2">Cài app lên màn hình chính</h2>' +
       '<span class="small"><b>iPhone:</b> mở bằng Safari → nút Chia sẻ → “Thêm vào MH chính”.</span>' +
       '<span class="small"><b>Android:</b> mở bằng Chrome → menu ⋮ → “Cài đặt ứng dụng” hoặc “Thêm vào màn hình chính”.</span></div>' +
-      '<span class="small muted center">' + esc(appName()) + ' · ' + esc(bot()) + ' làm cho ' + esc(user()) + ' · ' + APP_VERSION + '</span>' +
+      '<span class="small muted center">' + esc(appName()) + ' · ' + esc(bot()) + ' làm cho ' + esc(user()) + ' · ' + APP_VERSION +
+      (backendStatus() ? ' · Apps Script bản ' + (backendStatus().remote || 'cũ') : '') + '</span>' +
       '</section>';
   }
 
