@@ -36,6 +36,8 @@
         case 'H': return String(Number(p.hour));
         case 'm': return String(Number(p.minute));
         case 'u': return String(dow);
+        case 'd': return String(Number(p.day));
+        case 'M': return String(Number(p.month));
         default: throw new Error('Định dạng ngày chưa hỗ trợ: ' + pat);
       }
     },
