@@ -16,6 +16,10 @@
 
 const TZ = 'Asia/Ho_Chi_Minh';
 
+/** Số phiên bản backend: tăng mỗi khi Code.gs đổi API hoặc sheet. App so với Code.gs trên GitHub
+ *  để báo khi Web app đang deploy vẫn là bản cũ. (Hàm thay vì const để app đọc được sau khi nạp file.) */
+function backendVersion_() { return 12; }
+
 /** Thuộc tính món ăn (mỗi thuộc tính là 1 cột checkbox trong sheet Dishes), chia theo nhóm để hiển thị.
  *  Muốn thêm thuộc tính mới: chỉ cần thêm cột mới vào sheet Dishes, backend tự nhận và xếp vào nhóm "Khác". */
 const DISH_ATTR_GROUPS = [
@@ -148,7 +152,7 @@ const PHOTO_FOLDER_NAME = 'Chìu ông hông bíc ăn gì - Ảnh kỷ niệm';
 // ───────────────────────── API ─────────────────────────
 
 const ACTIONS = {
-  ping: () => ({ app: getConfigValue_('app_name') || 'Chìu ông hông bíc ăn gì', time: nowIso_() }),
+  ping: () => ({ app: getConfigValue_('app_name') || 'Chìu ông hông bíc ăn gì', time: nowIso_(), backendVersion: backendVersion_() }),
   bootstrap: () => bootstrap_(),
   create: (p) => { assertCrud_(p.table); return withLock_(() => createRecord_(p.table, p.data || {})); },
   update: (p) => { assertCrud_(p.table); return withLock_(() => updateRecord_(p.table, p.id, p.data || {})); },
@@ -827,7 +831,8 @@ function bootstrap_() {
     contextRules: contextRules,
     learned: learnedWeights_(contextAttrStats_(meals, dMap, attrs), config),
     config: config,
-    serverTime: nowIso_()
+    serverTime: nowIso_(),
+    backendVersion: backendVersion_()
   };
 }
 

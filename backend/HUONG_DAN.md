@@ -22,6 +22,10 @@ Backend chạy trên **Google Sheets + Apps Script**, lưu ảnh vào **Google D
 9. Kiểm tra: mở trên trình duyệt link `<Web app URL>?action=bootstrap&token=<mã>`. Nếu thấy JSON có `"ok":true` là xong.
 
 > **Mỗi lần sửa code** phải vào **Deploy > Manage deployments > Edit > Version: New version > Deploy** thì bản mới mới có hiệu lực. URL giữ nguyên.
+>
+> - Chỉ bấm **Save** thì Web app vẫn chạy bản cũ.
+> - Chọn **New deployment** sẽ tạo ra link mới, trong khi app vẫn gọi link cũ trong `js/config.js`.
+> - Kiểm tra: cuối màn **Cài đặt** của app có dòng "Apps Script bản N". Nếu Apps Script cũ hơn `backend/Code.gs` trên GitHub, app sẽ hiện cảnh báo "Apps Script đang chạy bản cũ" ở trang chủ.
 
 ### Nâng cấp từ bản cũ lên V2
 
