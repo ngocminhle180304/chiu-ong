@@ -108,6 +108,8 @@
     }
     return 0;
   };
+  // Như Sheet thật: sheet mới có sẵn 1000 dòng.
+  Sheet.prototype.getMaxRows = function () { return Math.max(1000, this.getLastRow()); };
   Sheet.prototype.getLastColumn = function () {
     return this.rows.reduce(function (m, r) { return Math.max(m, r.length); }, 0);
   };
