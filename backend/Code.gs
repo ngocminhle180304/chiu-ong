@@ -245,9 +245,18 @@ function toBool_(v) {
   return s === 'true' || s === '1' || s === 'x' || s === 'yes' || s === 'có';
 }
 
+/** Cột điểm thang 0–5. Sheet tiếng Việt hay tự đổi "4.5" thành ngày 4/5: đọc lại thành 4.5. */
+const SCORE_COLS = ['quality', 'price_score', 'space', 'service', 'rating', 'dish_rating'];
+
 function fromCell_(h, v, boolCols, numCols) {
   if (boolCols.indexOf(h) >= 0) return toBool_(v);
   if (v === '' || v == null) return null;
+  if (v instanceof Date && numCols.indexOf(h) >= 0) {
+    if (SCORE_COLS.indexOf(h) < 0) return null;
+    const d = Number(Utilities.formatDate(v, TZ, 'd')); const m = Number(Utilities.formatDate(v, TZ, 'M'));
+    const n = Number(d + '.' + m);
+    return d <= 5 && n <= 5 ? n : null;
+  }
   if (v instanceof Date) {
     if (h === 'open_time' || h === 'close_time') return Utilities.formatDate(v, TZ, 'HH:mm');
     if (h === 'date') return Utilities.formatDate(v, TZ, 'yyyy-MM-dd');
@@ -280,6 +289,7 @@ function readAll_(table, includeDeleted) {
       const o = {};
       headers.forEach((h, i) => { if (h) o[h] = fromCell_(h, r[i], bools, def.num); });
       if (table === 'restaurants') { const c = fixLatLng_(o.lat, o.lng); o.lat = c.lat; o.lng = c.lng; }
+      if (table === 'categories') { o.type = normCategoryType_(o.type); o.name = o.name == null ? '' : String(o.name).trim(); }
       return o;
     })
     .filter((o) => includeDeleted || !(def.soft && o.deleted === true));
@@ -516,6 +526,14 @@ function checkScores_(data) {
 
 // ───────────────────────── PHÂN LOẠI (CATEGORIES) ─────────────────────────
 
+/** Cột type nhập tay có thể là "Restaurant ", "Quán", "món"… → 'restaurant' | 'dish'. */
+function normCategoryType_(t) {
+  const s = String(t == null ? '' : t).trim().toLowerCase();
+  if (/^(restaurants?|quán|quan|shops?|store)$/.test(s)) return 'restaurant';
+  if (/^(dish(es)?|món|mon|foods?)$/.test(s)) return 'dish';
+  return s;
+}
+
 function categoryTypeOf_(table) { return table === 'restaurants' ? 'restaurant' : 'dish'; }
 function typeLabel_(type) { return type === 'restaurant' ? 'quán' : 'món'; }
 function lower_(s) { return String(s == null ? '' : s).trim().toLowerCase(); }
@@ -610,6 +628,30 @@ function removeCategory_(id, reassignTo) {
   const moved = target ? moveCategory_(table, cur.name, target) : 0;
   remove_('categories', id);
   return { id: id, deleted: true, moved: moved, moved_to: target || null };
+}
+
+/** Menu "Leeming > Đồng bộ danh sách phân loại": chuẩn hóa cột type, thêm phân loại quán/món đang dùng còn thiếu. */
+function syncCategories() {
+  return withLock_(() => {
+    const sh = sheet_('categories');
+    const ti = headersOf_(sh).indexOf('type');
+    let fixedType = 0;
+    if (ti >= 0 && sh.getLastRow() >= 2) {
+      const range = sh.getRange(2, ti + 1, sh.getLastRow() - 1, 1);
+      const vals = range.getValues().map((r) => {
+        const t = normCategoryType_(r[0]);
+        if (r[0] !== '' && t !== r[0]) fixedType++;
+        return [r[0] === '' ? '' : "'" + t];
+      });
+      if (fixedType) range.setValues(vals);
+    }
+    const added = syncCategories_();
+    const msg = 'Đã chuẩn hóa ' + fixedType + ' ô type và thêm ' + added + ' phân loại còn thiếu. Hiện có ' +
+      categoriesOf_('restaurant').length + ' phân loại quán, ' + categoriesOf_('dish').length + ' phân loại món.';
+    console.log(msg);
+    try { SpreadsheetApp.getUi().alert(msg); } catch (e) { /* chạy từ editor */ }
+    return { fixedType: fixedType, added: added };
+  });
 }
 
 /** Thêm phân loại mặc định + phân loại đang dùng còn thiếu, rồi đánh lại sort_order (giữ thứ tự cũ, cái mới xếp sau). */
@@ -741,6 +783,8 @@ function bootstrap_() {
     Object.keys(RATING_WEIGHTS).forEach((k) => {
       r.meal_avg[k] = s && s.crit[k] && s.crit[k].n ? round1_(s.crit[k].sum / s.crit[k].n) : null;
     });
+    // Nhập thẳng vào Sheet thì cột rating có thể trống: tính từ 4 tiêu chí như khi thêm qua app.
+    if (!isNum_(r.rating)) r.rating = calcRating_(r);
     // Điểm xếp hạng "Ngon nhất": trung bình các bữa đã ăn; quán chưa có bữa nào thì dùng rating nhập tay.
     r.score = r.meal_rating_avg != null ? r.meal_rating_avg : (r.rating != null ? r.rating : null);
   });
@@ -1699,6 +1743,7 @@ function onOpen() {
     .addItem('Khởi tạo / bổ sung sheet', 'setupSheets')
     .addItem('Nâng cấp dữ liệu lên V2', 'migrateSchemaV2')
     .addItem('Kiểm tra & sửa tọa độ quán', 'fixCoordinates')
+    .addItem('Đồng bộ danh sách phân loại', 'syncCategories')
     .addItem('Xem mã truy cập', 'showToken')
     .addItem('Tạo lại mã truy cập', 'resetToken')
     .addSeparator()
@@ -1913,7 +1958,8 @@ function resetToken() {
 }
 
 function seedSampleData_() {
-  if (readAll_('categories').length === 0) syncCategories_();
+  // Luôn đồng bộ: thêm phân loại mặc định và mọi phân loại quán/món đang dùng mà danh sách còn thiếu.
+  syncCategories_();
   if (readAll_('contextRules').length === 0) seedContextRules_();
 
   if (readAll_('questions').length === 0) {

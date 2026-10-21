@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = 'leeming-v10'; // đổi cùng VERSION trong sw.js
+  var APP_VERSION = 'leeming-v11'; // đổi cùng VERSION trong sw.js
   var CFG = window.APP_CONFIG || {};
   var DEMO = !CFG.API_URL;
   var WRITE_ACTIONS = { create: 1, update: 1, remove: 1, linkDishes: 1, saveSession: 1, saveMeal: 1 };
@@ -124,13 +124,16 @@
   }
   function categoryField(type, value, id) {
     var list = catList(type); var v = value || '';
+    // Sheet Categories chưa có phân loại loại này: tạm dùng các phân loại quán/món đang dùng (backend cũng không kiểm tra khi danh sách trống).
+    var fallback = !list.length;
+    if (fallback) list = categories(catItems(type), type).map(function (n) { return { name: n }; });
     var known = list.some(function (c) { return c.name === v; });
     return '<div class="field"><div class="label-row"><label for="' + id + '">Phân loại</label>' +
       '<a class="small" href="#/cats/' + type + '">Sửa danh sách</a></div>' +
       '<select class="select" id="' + id + '" name="category"><option value="">— Chưa phân loại —</option>' +
       (v && !known ? '<option value="' + esc(v) + '" selected>' + esc(v) + ' (chưa có trong danh sách)</option>' : '') +
       list.map(function (c) { return '<option value="' + esc(c.name) + '"' + (c.name === v ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('') +
-      '</select>' + (list.length ? '' : '<span class="small muted">Chưa có danh sách phân loại ' + typeWord(type) + '.</span>') + '</div>';
+      '</select>' + (fallback ? '<span class="small muted">Danh sách phân loại ' + typeWord(type) + ' trong Sheet đang trống, đang dùng tạm các phân loại có sẵn trong sổ. Chạy “Leeming > Đồng bộ danh sách phân loại” trong Sheet để lưu hẳn.</span>' : '') + '</div>';
   }
 
   // ── Điểm quán: 4 tiêu chí 0–5, điểm chung tính theo trọng số từ backend ──
@@ -150,7 +153,7 @@
     return SCORE_KEYS.filter(function (k) { return hasScore(v(k)); }).map(function (k) { return scoreLabel(k) + ' ' + fmtScore(v(k)); }).join(' · ');
   }
   /** Điểm quán: trung bình các bữa đã ăn (score), quán chưa có bữa nào thì là rating nhập tay. */
-  function shopScore(r) { return r.score != null ? r.score : r.rating; }
+  function shopScore(r) { return hasScore(r.score) ? Number(r.score) : (hasScore(r.rating) ? Number(r.rating) : null); }
   function fmtStar(n) { return String(Math.round(Number(n) * 10) / 10).replace('.', ','); }
   function calcMean(r) {
     var ks = SCORE_KEYS.filter(function (k) { return hasScore(r[k]); });
@@ -265,6 +268,16 @@
     (d.dishAttrGroups || []).forEach(function (g) { g.attrs.forEach(function (a) { if (keys.indexOf(a.key) < 0) keys.push(a.key); }); });
     d.dishAttrGroups = dishAttrGroups_(keys);
     d.dishAttrs = d.dishAttrGroups.reduce(function (out, g) { return out.concat(g.attrs); }, []);
+    // Phân loại nhập tay có type "Restaurant ", "Món"… → restaurant/dish, để ô chọn phân loại không bị trống.
+    if (typeof normCategoryType_ === 'function') {
+      (d.categories || []).forEach(function (c) { c.type = normCategoryType_(c.type); c.name = String(c.name == null ? '' : c.name).trim(); });
+    }
+    // Điểm không phải số (vd ô điểm bị Sheet đổi thành ngày) thì coi như chưa có, tránh hiện "NaN".
+    (d.restaurants || []).forEach(function (r) {
+      ['rating', 'score', 'quality', 'price_score', 'space', 'service'].forEach(function (k) { if (r[k] != null && !hasScore(r[k])) r[k] = null; });
+      if (r.rating == null && typeof calcRating_ === 'function') r.rating = calcRating_(r);
+      if (r.score == null) r.score = r.meal_rating_avg != null && hasScore(r.meal_rating_avg) ? r.meal_rating_avg : r.rating;
+    });
     // Tọa độ bị Sheet đọc sai (vd "21.028" thành 21028, lat/lng đảo chỗ) thì sửa luôn ở đây,
     // để khoảng cách đúng cả khi Apps Script đang deploy chưa có bản sửa.
     if (typeof fixLatLng_ === 'function') {
