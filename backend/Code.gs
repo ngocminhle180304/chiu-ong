@@ -1726,7 +1726,8 @@ function ensureSheets_() {
     // Cột ngày của dịp đặc biệt để dạng chữ, tránh Sheet tự đổi "10-20" thành ngày của năm nay.
     if (t === 'contextRules') {
       const col = headersOf_(sh).indexOf('date') + 1;
-      if (col > 0) sh.getRange(2, col, 1000, 1).setNumberFormat('@');
+      // Chỉ trong số dòng sheet đang có: Sheets báo lỗi nếu vùng vượt quá kích thước sheet (sheet mới có 1000 dòng).
+      if (col > 0 && sh.getMaxRows() > 1) sh.getRange(2, col, sh.getMaxRows() - 1, 1).setNumberFormat('@');
     }
   });
   const blank = ss.getSheetByName('Sheet1') || ss.getSheetByName('Trang tính1');
