@@ -64,7 +64,8 @@ App sẽ có icon riêng và mở toàn màn hình. Lần đầu bấm **Gợi �
 
 - **Lời chúc**: điền vào ô `birthday_message` trong sheet **Config**. Muốn xuống dòng thì bấm Ctrl+Enter trong ô. Lời chúc hiện **một lần** khi Cá mở app, sau đó xem lại được trong Cài đặt.
 - **Vị trí nhà**: điền `home_lat` / `home_lng` trong Config. App dùng vị trí này khi Cá không bật định vị (để tính khoảng cách và xem thời tiết).
-- **Ngày đặc biệt**: trong sheet **ContextRules**, điền cột `date` của dòng **Sinh nhật Cá** và **Ngày kỷ niệm** theo dạng `MM-DD` (ví dụ `07-15`). Đúng ngày đó app tự bật chip dịp, Leeming chào một câu và ưu tiên món, quán xịn hơn. 20/10, 8/3, Valentine đã có sẵn.
+- **Ngày đặc biệt**: trong sheet **ContextRules**, điền cột `date` của dòng **Sinh nhật Cá** và **Ngày kỷ niệm** theo dạng `MM-DD` (ví dụ `07-15`).
+- **Quán cho sinh nhật Cá**: dòng **Sinh nhật Cá** trong **ContextRules** có cột `restaurant` = `The Galleon - Vịnh Tàu Chiến`. Đúng ngày sinh nhật, app hiện thẻ "Kế hoạch Sinh nhật Cá" với quán này. Nhớ thêm quán vào Sổ quán và tick món của quán. Muốn đổi quán thì sửa ô `restaurant`. Đúng ngày đó app tự bật chip dịp, Leeming chào một câu và ưu tiên món, quán xịn hơn. 20/10, 8/3, Valentine đã có sẵn.
 - **Ngữ cảnh**: sửa luật trong sheet **ContextRules** (xem `backend/HUONG_DAN.md`, mục 3). Muốn ngữ cảnh ảnh hưởng mạnh hay nhẹ hơn thì đổi `context_strength` trong Config.
 - **Dữ liệu**:
   - Xóa 3 quán có chữ `[Mẫu]`.
@@ -81,7 +82,7 @@ App sẽ có icon riêng và mở toàn màn hình. Lần đầu bấm **Gợi �
 ## 6. Khi sửa code
 
 - Sửa backend: cập nhật **cả** bản trong Apps Script (rồi *Deploy > Manage deployments > New version*) **lẫn** `backend/Code.gs` trên GitHub. Đổi API hoặc sheet thì tăng số trong `backendVersion_()` của `Code.gs`, để app biết khi Apps Script chưa deploy bản mới.
-- Sửa giao diện: đổi `VERSION` trong `sw.js`, `APP_VERSION` trong `js/app.js` và số `?v=` trong `index.html` (ví dụ `leeming-v14` / `?v=14`) để điện thoại tải bản mới ngay. Phiên bản đang chạy hiện ở cuối màn Cài đặt.
+- Sửa giao diện: đổi `VERSION` trong `sw.js`, `APP_VERSION` trong `js/app.js` và số `?v=` trong `index.html` (ví dụ `leeming-v15` / `?v=15`) để điện thoại tải bản mới ngay. Phiên bản đang chạy hiện ở cuối màn Cài đặt.
 - `js/gas-shim.js` chỉ giả lập các dịch vụ của Google (Sheet, Drive, Utilities…). Logic thật (gợi ý, điểm quán, phân loại, migration) nằm hết trong `backend/Code.gs` và được app nạp nguyên file, nên sửa `Code.gs` là chế độ dùng thử cũng chạy theo.
 
 ## 7. Nâng cấp lên V2 (phân loại cố định, 4 điểm quán, thuộc tính món theo nhóm)

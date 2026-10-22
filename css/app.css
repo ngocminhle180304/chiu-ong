@@ -304,3 +304,9 @@ img { display: block; max-width: 100%; }
 .tried-item { display: flex; gap: 8px; align-items: center; font-size: 14px; }
 .mini-star:active { background: var(--sky); }
 .card.warn { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+
+/* ── Kế hoạch dịp đặc biệt (vd sinh nhật Cá) ── */
+.card.plan { background: var(--pink); border-color: var(--pink); gap: 8px; }
+.plan-k { font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--deep); }
+.plan-name { font-family: var(--display); font-weight: 800; font-size: 24px; line-height: 1.1; }
+.plan-place { background: var(--card); border-radius: 18px; padding: 14px; }

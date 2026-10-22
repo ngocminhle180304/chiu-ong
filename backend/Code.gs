@@ -18,7 +18,7 @@ const TZ = 'Asia/Ho_Chi_Minh';
 
 /** Số phiên bản backend: tăng mỗi khi Code.gs đổi API hoặc sheet. App so với Code.gs trên GitHub
  *  để báo khi Web app đang deploy vẫn là bản cũ. (Hàm thay vì const để app đọc được sau khi nạp file.) */
-function backendVersion_() { return 13; }
+function backendVersion_() { return 14; }
 
 /** Thuộc tính món ăn (mỗi thuộc tính là 1 cột checkbox trong sheet Dishes), chia theo nhóm để hiển thị.
  *  Muốn thêm thuộc tính mới: chỉ cần thêm cột mới vào sheet Dishes, backend tự nhận và xếp vào nhóm "Khác". */
@@ -74,6 +74,8 @@ const CONFIG_DEFAULTS = [
 ];
 const CONTEXT_TYPES = ['weather', 'time', 'mood', 'occasion'];
 const WEATHER_KEYS = ['rain', 'cold', 'cool', 'hot', 'hot_humid'];
+/** Quán đã chọn sẵn cho sinh nhật Cá (cột restaurant của dịp birthday_ca trong ContextRules). */
+const BIRTHDAY_RESTAURANT = 'The Galleon - Vịnh Tàu Chiến';
 
 const TABLES = {
   restaurants: {
@@ -131,7 +133,7 @@ const TABLES = {
   },
   contextRules: {
     sheet: 'ContextRules', prefix: 'CR', soft: false,
-    headers: ['id', 'type', 'key', 'label', 'emoji', 'rule', 'price_bias', 'novelty_bias', 'message', 'date', 'active',
+    headers: ['id', 'type', 'key', 'label', 'emoji', 'rule', 'price_bias', 'novelty_bias', 'message', 'date', 'restaurant', 'active',
       'sort_order', 'created_at', 'updated_at'],
     num: ['price_bias', 'novelty_bias', 'sort_order'],
     bool: ['active']
@@ -1185,8 +1187,33 @@ function deriveContext_(data, c, now) {
       weights: parseWeights_(r.rule), price_bias: num0_(r.price_bias), novelty_bias: num0_(r.novelty_bias)
     })),
     weather: Object.assign({}, c.weather || {}, { keys: wKeys, source: wSource }),
-    moods: moods, occasions: occasions, auto_occasions: autoOcc, time_bucket: bucket, today: today
+    moods: moods, occasions: occasions, auto_occasions: autoOcc, time_bucket: bucket, today: today,
+    plan: occasionPlan_(data, occasions.map((k) => find('occasion', k)).filter(Boolean))
   };
+}
+
+/** Dịp đang áp dụng có cột restaurant (vd sinh nhật Cá → The Galleon) → kế hoạch đi ăn quán đó.
+ *  {occasion, label, emoji, message, restaurant_name, restaurant (bản ghi trong sổ, có thể null)}. */
+function occasionPlan_(data, occasionRules) {
+  const r = occasionRules.filter((x) => String(x.restaurant || '').trim())[0];
+  if (!r) return null;
+  const want = String(r.restaurant).trim();
+  return {
+    occasion: String(r.key), label: String(r.label || r.key), emoji: r.emoji || '', message: r.message || '',
+    restaurant_name: want, restaurant: findRestaurantByName_(data.restaurants || [], want)
+  };
+}
+
+/** Tìm quán trong sổ theo id hoặc tên (bỏ dấu, bỏ ký tự "-", "–"…; chấp nhận tên này chứa tên kia). */
+function findRestaurantByName_(list, nameOrId) {
+  const key = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd')
+    .replace(/[^a-z0-9]+/g, ' ').trim();
+  const want = key(nameOrId);
+  if (!want) return null;
+  return list.filter((x) => x.id === nameOrId)[0]
+    || list.filter((x) => key(x.name) === want)[0]
+    || (want.length >= 6 ? list.filter((x) => { const k = key(x.name); return k.length >= 6 && (k.indexOf(want) >= 0 || want.indexOf(k) >= 0); })[0] : null)
+    || null;
 }
 
 /** Vị trí cho ngữ cảnh: điện thoại → nhà (Config) → không có.
@@ -1268,7 +1295,8 @@ function ctxSummary_(ctx) {
   return {
     mode: ctx.mode, keys: ctx.keys, labels: ctx.labels, time_bucket: ctx.time_bucket, weather: ctx.weather,
     moods: ctx.moods, occasions: ctx.occasions, auto_occasions: ctx.auto_occasions,
-    location_source: ctx.loc.source, radius_km: ctx.loc.radius_km
+    location_source: ctx.loc.source, radius_km: ctx.loc.radius_km,
+    plan: ctx.plan ? { occasion: ctx.plan.occasion, restaurant_name: ctx.plan.restaurant_name, restaurant_id: ctx.plan.restaurant ? ctx.plan.restaurant.id : null } : null
   };
 }
 
@@ -1347,7 +1375,15 @@ function fmtKm_(km) { return km < 1 ? Math.round(km * 1000) + ' m' : String(roun
  *  payload: {context, rejected:[...], lat?, lng?, radius_km?, now?, dish_id? (chọn sẵn món, vd từ alternatives)} */
 function suggestQuick_(data, p) {
   const ctx = buildContext_(data, p, 'quick');
-  const pool = filterDishes_(data, [], p.rejected, ctx.at).candidates;
+  let pool = filterDishes_(data, [], p.rejected, ctx.at).candidates;
+  // Dịp có quán chọn sẵn (vd sinh nhật Cá): chọn món trong các món của quán đó (nếu sổ đã gán món).
+  const planR = ctx.plan && ctx.plan.restaurant;
+  if (planR) {
+    const rej = {}; (p.rejected || []).forEach((id) => { rej[id] = true; });
+    const ids = {}; data.restaurantDishes.forEach((l) => { if (l.restaurant_id === planR.id) ids[l.dish_id] = true; });
+    const inPlan = data.dishes.filter((d) => ids[d.id] && !rej[d.id]);
+    if (inPlan.length) pool = inPlan;
+  }
   const summary = ctxSummary_(ctx);
   if (!pool.length) return { dish: null, restaurants: null, reasons: [], context: summary, alternatives: [], exhausted: true };
   const weight = (d) => dishWeight_(d, ctx);
@@ -1365,13 +1401,38 @@ function suggestQuick_(data, p) {
     dish_id: dish.id, lat: isNum_(p.lat) ? p.lat : c.lat, lng: isNum_(p.lng) ? p.lng : c.lng, now: ctx.at, _ctx: ctx
   });
   const reasons = contextReasons_(ctx, dish);
+  const plan = quickPlan_(data, ctx, p);
+  if (plan) reasons.unshift(plan.restaurant ? 'Hôm nay ' + plan.label + ', bố đặt sẵn ' + plan.restaurant.name + ' rồi nha!'
+    : 'Hôm nay ' + plan.label + ', bố định đưa Cá đi ' + plan.restaurant_name + ' nè!');
   const top = restaurants.open[0];
-  if (top && top.distance_km != null) {
+  if (!plan && top && top.distance_km != null) {
     reasons.push(top.out_of_radius
       ? 'Quán gần nhất có món này hơi xa (' + fmtKm_(top.distance_km) + '), Cá cân nhắc nha.'
       : top.name + ' cách có ' + fmtKm_(top.distance_km) + ' thôi, đi liền nè.');
   }
-  return { dish: dish, restaurants: restaurants, reasons: reasons, context: summary, alternatives: alternatives, exhausted: false };
+  return { dish: dish, restaurants: restaurants, reasons: reasons, context: summary, alternatives: alternatives, exhausted: false, plan: plan };
+}
+
+/** Kế hoạch quán cho màn Gợi ý nhanh: kèm khoảng cách, đang mở, link chỉ đường; quán chưa có trong sổ thì kèm link tìm trên Google Maps. */
+function quickPlan_(data, ctx, p) {
+  if (!ctx.plan) return null;
+  const out = { occasion: ctx.plan.occasion, label: ctx.plan.label, emoji: ctx.plan.emoji, message: ctx.plan.message, restaurant_name: ctx.plan.restaurant_name };
+  const r = ctx.plan.restaurant;
+  if (!r) {
+    out.restaurant = null;
+    out.maps_search = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(ctx.plan.restaurant_name);
+    return out;
+  }
+  const c = p.context || {};
+  let lat = isNum_(p.lat) ? p.lat : c.lat; let lng = isNum_(p.lng) ? p.lng : c.lng;
+  if (!isNum_(lat) || !isNum_(lng)) { lat = data.config.home_lat; lng = data.config.home_lng; }
+  const dist = isNum_(lat) && isNum_(lng) && isNum_(r.lat) && isNum_(r.lng)
+    ? round1_(haversineKm_(Number(lat), Number(lng), Number(r.lat), Number(r.lng))) : null;
+  out.restaurant = Object.assign({}, r, {
+    distance_km: dist, is_open: isOpenAt_(r, ctx.at), is_planned: true,
+    maps_link: r.maps_url || (isNum_(r.lat) && isNum_(r.lng) ? 'https://www.google.com/maps/dir/?api=1&destination=' + r.lat + ',' + r.lng : null)
+  });
+  return out;
 }
 
 /** Thống kê theo ngữ cảnh: với mỗi tag, số bữa (có món trong sổ) và số bữa có từng thuộc tính. Khóa '' = mọi bữa. */
@@ -1909,8 +1970,10 @@ function onOpen() {
 }
 
 /** Tạo sheet và cột còn thiếu. Không xóa dữ liệu, cột mới được thêm vào cuối. */
+/** Tạo sheet và cột còn thiếu (không xóa dữ liệu). Trả về danh sách "Sheet.cột" vừa thêm vào sheet đã có. */
 function ensureSheets_() {
   const ss = SpreadsheetApp.getActive();
+  const added = [];
   Object.keys(TABLES).forEach((t) => {
     const def = TABLES[t];
     let sh = ss.getSheetByName(def.sheet);
@@ -1923,6 +1986,7 @@ function ensureSheets_() {
       const existing = headersOf_(sh);
       def.headers.filter((h) => existing.indexOf(h) < 0).forEach((h) => {
         sh.getRange(1, sh.getLastColumn() + 1).setValue(h).setFontWeight('bold').setBackground('#FFE1D2');
+        added.push(def.sheet + '.' + h);
       });
     }
     // Cột ngày của dịp đặc biệt để dạng chữ, tránh Sheet tự đổi "10-20" thành ngày của năm nay.
@@ -1934,14 +1998,20 @@ function ensureSheets_() {
   });
   const blank = ss.getSheetByName('Sheet1') || ss.getSheetByName('Trang tính1');
   if (blank && blank.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(blank);
+  return added;
 }
 
 /** Chạy 1 lần: tạo các sheet, tiêu đề cột, dữ liệu mẫu và mã truy cập. Chạy lại không làm mất dữ liệu. */
 function setupSheets() {
   const ss = SpreadsheetApp.getActive();
-  ensureSheets_();
+  const added = ensureSheets_();
   ensureConfigKeys_();
   seedSampleData_();
+  // Lần đầu thêm cột restaurant vào ContextRules: điền sẵn quán sinh nhật Cá (sau đó sửa tay trong Sheet tùy ý).
+  if (added.indexOf('ContextRules.restaurant') >= 0) {
+    const bd = readAll_('contextRules').filter((r) => r.key === 'birthday_ca' && !String(r.restaurant || '').trim())[0];
+    if (bd) update_('contextRules', bd.id, { restaurant: BIRTHDAY_RESTAURANT });
+  }
 
   const props = PropertiesService.getScriptProperties();
   if (!props.getProperty('API_TOKEN')) props.setProperty('API_TOKEN', generateToken_());
@@ -2085,7 +2155,7 @@ function seedContextRules_() {
     ['mood', 'excited', 'Hứng khởi', '🤩', 'cay=1', 0, 1, 'Đang hứng khởi, thử món mới cho máu nha!', ''],
     ['mood', 'sick', 'Hơi ốm', '🤒', 'nuoc=2;nong=2;cay=-2;beo=-1', 0, 0, 'Cá hơi ốm, ăn đồ nóng có nước, đừng ăn cay nha.', ''],
     ['mood', 'crave_new', 'Thèm gì đó lạ', '🧭', '', 0, 1, 'Cá thèm lạ miệng nên Leeming chọn món ít ăn.', ''],
-    ['occasion', 'birthday_ca', 'Sinh nhật Cá', '🎂', 'an_no=1', 1, 0, 'Sinh nhật Cá mà, phải ăn món xịn!', ''],
+    ['occasion', 'birthday_ca', 'Sinh nhật Cá', '🎂', 'an_no=1', 1, 0, 'Sinh nhật Cá mà, phải ăn món xịn!', '', BIRTHDAY_RESTAURANT],
     ['occasion', 'anniversary', 'Ngày kỷ niệm', '💞', '', 1, 0, 'Ngày kỷ niệm của hai đứa, đi ăn chỗ ngon nha.', ''],
     ['occasion', 'womens_day_vn', '20/10', '💐', '', 1, 0, 'Hôm nay 20/10, Cá được chiều nhất nhà!', '10-20'],
     ['occasion', 'intl_womens_day', '8/3', '🌷', '', 1, 0, 'Mùng 8/3 rồi, Cá chọn gì cũng được hết.', '03-08'],
@@ -2094,7 +2164,7 @@ function seedContextRules_() {
   ];
   rows.forEach((r, i) => insert_('contextRules', {
     type: r[0], key: r[1], label: r[2], emoji: r[3], rule: r[4], price_bias: r[5], novelty_bias: r[6],
-    message: r[7], date: r[8], active: true, sort_order: i + 1
+    message: r[7], date: r[8], restaurant: r[9] || '', active: true, sort_order: i + 1
   }));
   return rows.length;
 }
