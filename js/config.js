@@ -6,5 +6,5 @@
  * Mã truy cập được nhập 1 lần trên điện thoại, hoặc mở link dạng:  https://…/?k=MA_TRUY_CAP
  */
 window.APP_CONFIG = {
-  API_URL: 'https://script.google.com/macros/s/AKfycbxL64QR7_XroNg7_yfE0H-vIUK61fDPDIYTpOY7XhnPk8Ri5qkNXhjsrmeHEW2Sop_j8g/exec'
+  API_URL: 'https://script.google.com/macros/s/AKfycbxNO09T3bo19xnVy0iHeql7zYUPcx4pIIIiGvxkUCofwF_p4hTkg2N53PVTWBCYyNQXRA/exec'
 };
