@@ -18,7 +18,7 @@ const TZ = 'Asia/Ho_Chi_Minh';
 
 /** Số phiên bản backend: tăng mỗi khi Code.gs đổi API hoặc sheet. App so với Code.gs trên GitHub
  *  để báo khi Web app đang deploy vẫn là bản cũ. (Hàm thay vì const để app đọc được sau khi nạp file.) */
-function backendVersion_() { return 14; }
+function backendVersion_() { return 15; }
 
 /** Thuộc tính món ăn (mỗi thuộc tính là 1 cột checkbox trong sheet Dishes), chia theo nhóm để hiển thị.
  *  Muốn thêm thuộc tính mới: chỉ cần thêm cột mới vào sheet Dishes, backend tự nhận và xếp vào nhóm "Khác". */
@@ -74,7 +74,8 @@ const CONFIG_DEFAULTS = [
 ];
 const CONTEXT_TYPES = ['weather', 'time', 'mood', 'occasion'];
 const WEATHER_KEYS = ['rain', 'cold', 'cool', 'hot', 'hot_humid'];
-/** Quán đã chọn sẵn cho sinh nhật Cá (cột restaurant của dịp birthday_ca trong ContextRules). */
+/** Quán bố chọn sẵn cho sinh nhật Cá (cột restaurant của dịp birthday_ca trong ContextRules).
+ *  Bí mật: app không nói là chọn sẵn, chỉ "tình cờ" gợi ý quán này khi dịp sinh nhật đang bật. */
 const BIRTHDAY_RESTAURANT = 'The Galleon - Vịnh Tàu Chiến';
 
 const TABLES = {
@@ -1192,7 +1193,7 @@ function deriveContext_(data, c, now) {
   };
 }
 
-/** Dịp đang áp dụng có cột restaurant (vd sinh nhật Cá → The Galleon) → kế hoạch đi ăn quán đó.
+/** Dịp đang áp dụng có cột restaurant (vd sinh nhật Cá → The Galleon) → quán sẽ được "tình cờ" gợi ý.
  *  {occasion, label, emoji, message, restaurant_name, restaurant (bản ghi trong sổ, có thể null)}. */
 function occasionPlan_(data, occasionRules) {
   const r = occasionRules.filter((x) => String(x.restaurant || '').trim())[0];
@@ -1295,8 +1296,7 @@ function ctxSummary_(ctx) {
   return {
     mode: ctx.mode, keys: ctx.keys, labels: ctx.labels, time_bucket: ctx.time_bucket, weather: ctx.weather,
     moods: ctx.moods, occasions: ctx.occasions, auto_occasions: ctx.auto_occasions,
-    location_source: ctx.loc.source, radius_km: ctx.loc.radius_km,
-    plan: ctx.plan ? { occasion: ctx.plan.occasion, restaurant_name: ctx.plan.restaurant_name, restaurant_id: ctx.plan.restaurant ? ctx.plan.restaurant.id : null } : null
+    location_source: ctx.loc.source, radius_km: ctx.loc.radius_km
   };
 }
 
@@ -1376,7 +1376,7 @@ function fmtKm_(km) { return km < 1 ? Math.round(km * 1000) + ' m' : String(roun
 function suggestQuick_(data, p) {
   const ctx = buildContext_(data, p, 'quick');
   let pool = filterDishes_(data, [], p.rejected, ctx.at).candidates;
-  // Dịp có quán chọn sẵn (vd sinh nhật Cá): chọn món trong các món của quán đó (nếu sổ đã gán món).
+  // Dịp có quán chọn sẵn (vd sinh nhật Cá): lặng lẽ chọn món trong các món của quán đó (nếu sổ đã gán món).
   const planR = ctx.plan && ctx.plan.restaurant;
   if (planR) {
     const rej = {}; (p.rejected || []).forEach((id) => { rej[id] = true; });
@@ -1400,39 +1400,36 @@ function suggestQuick_(data, p) {
   const restaurants = suggestRestaurants_(data, {
     dish_id: dish.id, lat: isNum_(p.lat) ? p.lat : c.lat, lng: isNum_(p.lng) ? p.lng : c.lng, now: ctx.at, _ctx: ctx
   });
+  if (planR) putPlannedFirst_(data, restaurants, planR, ctx, p);
   const reasons = contextReasons_(ctx, dish);
-  const plan = quickPlan_(data, ctx, p);
-  if (plan) reasons.unshift(plan.restaurant ? 'Hôm nay ' + plan.label + ', bố đặt sẵn ' + plan.restaurant.name + ' rồi nha!'
-    : 'Hôm nay ' + plan.label + ', bố định đưa Cá đi ' + plan.restaurant_name + ' nè!');
   const top = restaurants.open[0];
-  if (!plan && top && top.distance_km != null) {
+  if (top && top.distance_km != null) {
     reasons.push(top.out_of_radius
       ? 'Quán gần nhất có món này hơi xa (' + fmtKm_(top.distance_km) + '), Cá cân nhắc nha.'
       : top.name + ' cách có ' + fmtKm_(top.distance_km) + ' thôi, đi liền nè.');
   }
-  return { dish: dish, restaurants: restaurants, reasons: reasons, context: summary, alternatives: alternatives, exhausted: false, plan: plan };
+  return { dish: dish, restaurants: restaurants, reasons: reasons, context: summary, alternatives: alternatives, exhausted: false };
 }
 
-/** Kế hoạch quán cho màn Gợi ý nhanh: kèm khoảng cách, đang mở, link chỉ đường; quán chưa có trong sổ thì kèm link tìm trên Google Maps. */
-function quickPlan_(data, ctx, p) {
-  if (!ctx.plan) return null;
-  const out = { occasion: ctx.plan.occasion, label: ctx.plan.label, emoji: ctx.plan.emoji, message: ctx.plan.message, restaurant_name: ctx.plan.restaurant_name };
-  const r = ctx.plan.restaurant;
-  if (!r) {
-    out.restaurant = null;
-    out.maps_search = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(ctx.plan.restaurant_name);
-    return out;
-  }
+/** Đưa quán chọn sẵn lên đầu danh sách quán như một gợi ý bình thường ("Ngon nhất"), kể cả khi quán
+ *  không có trong danh sách vì chưa gán món đang gợi ý hoặc đang đóng cửa. Không đánh dấu gì khác. */
+function putPlannedFirst_(data, res, r, ctx, p) {
   const c = p.context || {};
   let lat = isNum_(p.lat) ? p.lat : c.lat; let lng = isNum_(p.lng) ? p.lng : c.lng;
   if (!isNum_(lat) || !isNum_(lng)) { lat = data.config.home_lat; lng = data.config.home_lng; }
-  const dist = isNum_(lat) && isNum_(lng) && isNum_(r.lat) && isNum_(r.lng)
-    ? round1_(haversineKm_(Number(lat), Number(lng), Number(r.lat), Number(r.lng))) : null;
-  out.restaurant = Object.assign({}, r, {
-    distance_km: dist, is_open: isOpenAt_(r, ctx.at), is_planned: true,
+  const found = res.open.filter((x) => x.id === r.id)[0];
+  const link = data.restaurantDishes.filter((l) => l.restaurant_id === r.id && l.dish_id === (res.dish && res.dish.id))[0];
+  const entry = found || Object.assign({}, r, {
+    dish_price: link ? link.price : null, dish_rating: link ? link.dish_rating : null,
+    distance_km: isNum_(lat) && isNum_(lng) && isNum_(r.lat) && isNum_(r.lng)
+      ? round1_(haversineKm_(Number(lat), Number(lng), Number(r.lat), Number(r.lng))) : null,
+    is_open: isOpenAt_(r, ctx.at),
     maps_link: r.maps_url || (isNum_(r.lat) && isNum_(r.lng) ? 'https://www.google.com/maps/dir/?api=1&destination=' + r.lat + ',' + r.lng : null)
   });
-  return out;
+  res.open = [entry].concat(res.open.filter((x) => x.id !== r.id));
+  res.closed = res.closed.filter((x) => x.id !== r.id);
+  res.open.forEach((x) => { x.is_best = x.id === r.id; });
+  entry.out_of_radius = false;
 }
 
 /** Thống kê theo ngữ cảnh: với mỗi tag, số bữa (có món trong sổ) và số bữa có từng thuộc tính. Khóa '' = mọi bữa. */

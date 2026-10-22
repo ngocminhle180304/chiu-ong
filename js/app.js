@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = 'leeming-v14'; // đổi cùng VERSION trong sw.js
+  var APP_VERSION = 'leeming-v15'; // đổi cùng VERSION trong sw.js
   var CFG = window.APP_CONFIG || {};
   var DEMO = !CFG.API_URL;
   var WRITE_ACTIONS = { create: 1, update: 1, remove: 1, linkDishes: 1, saveSession: 1, saveMeal: 1 };
@@ -388,7 +388,6 @@
     if (name === 'places' && !S.pick) name = S.ask ? 'ask' : 'home';
     if (name === 'memo' && !S.memo) name = 'home';
     if (name === 'quick' && !S.quick) name = 'home';
-    if (name !== 'shop') S.shopPrefill = null;
     var changed = S.route !== name || S.param !== param;
     if (name === 'cats' && S.route !== 'cats') { S.cats.back = S.lastHash && !/^#\/?cats/.test(S.lastHash) ? S.lastHash : '#/settings'; S.cats.edit = null; }
     S.lastHash = location.hash || '#/home';
@@ -640,13 +639,8 @@
     var moods = ctxRules('mood'); var occs = ctxRules('occasion');
     var greet = cx.auto_occasions.filter(function (k) { return cx.occasions.indexOf(k) >= 0; })
       .map(function (k) { return ctxRule('occasion', k); }).filter(function (x) { return x && x.message; })[0];
-    var plan = cx.plan;
     return '<div class="ctx-band" aria-label="Ngữ cảnh gợi ý">' +
-      (plan ? '<div class="card plan stack"><span class="plan-k">' + esc((plan.emoji || '🎉') + ' Kế hoạch ' + plan.label) + '</span>' +
-        '<strong class="plan-name">' + esc(plan.restaurant ? plan.restaurant.name : plan.restaurant_name) + '</strong>' +
-        '<span class="small">' + esc(plan.message || ('Hôm nay ' + plan.label + ', ' + bot() + ' chọn sẵn quán rồi nè.')) + '</span>' +
-        '<button class="btn btn-primary" data-act="startQuick">Xem kế hoạch ' + I.arrow + '</button></div>'
-        : (greet ? '<div class="greet">' + esc(greet.emoji || '🎉') + ' ' + esc(greet.message) + '</div>' : '')) +
+      (greet ? '<div class="greet">' + esc(greet.emoji || '🎉') + ' ' + esc(greet.message) + '</div>' : '') +
       '<div class="chip-scroll">' +
       cchip('ctxLoc', null, '📍 ' + esc(where) + ' · ' + (r ? r + ' km' : 'mọi nơi')) +
       cchip('ctxWeather', null, esc((wRules[0] && wRules[0].emoji) || (st.weather_override === 'none' ? '🚫' : '⛅')) + ' ' + esc(wText) + temp, false, st.weather_override ? ' manual' : '') +
@@ -734,8 +728,6 @@
         '<button class="btn btn-ghost" data-act="startAsk">Hỏi A/B</button></div></section>';
     }
     var d = r.dish; var c = r.context || {}; var res = r.restaurants || { open: [], closed: [] };
-    // Quán của kế hoạch đã có thẻ riêng ở trên, không lặp lại trong danh sách.
-    if (r.plan && r.plan.restaurant) res = Object.assign({}, res, { open: res.open.filter(function (x) { return x.id !== r.plan.restaurant.id; }) });
     var tags = (c.keys || []).map(function (k) {
       var rule = (S.data.contextRules || []).filter(function (x) { return String(x.key) === k; })[0];
       return rule ? '<span class="chip">' + esc((rule.emoji || '') + ' ' + rule.label) + '</span>' : '';
@@ -746,8 +738,7 @@
     var places = res.open.length ? placeCards(res.open, 'quick')
       : '<div class="card empty"><strong style="color:var(--ink)">Giờ này chưa có quán nào trong sổ đang bán ' + esc(d.name) + '</strong>' +
         (res.closed.length ? '<span class="small">' + res.closed.map(function (x) { return esc(x.name) + (x.open_time ? ' (mở ' + esc(x.open_time) + ')' : ''); }).join(' · ') + '</span>' : '') + '</div>';
-    return '<section class="screen">' + topbar('#/home', 'Gợi ý nhanh', r.plan ? 'Kế hoạch ' + r.plan.label : 'Ăn món này nha ' + user()) +
-      planCard(r.plan) +
+    return '<section class="screen">' + topbar('#/home', 'Gợi ý nhanh', 'Ăn món này nha ' + user()) +
       (tags ? '<div class="chips">' + tags + '</div>' : '') +
       '<div class="dish-card pop"><div class="dish-art">' + (d.image_url ? '<img src="' + esc(d.image_url) + '" alt="">' : I.bowl) + '</div>' +
       '<span class="dish-name">' + esc(d.name) + '</span>' +
@@ -764,22 +755,6 @@
       '<div class="list">' + places + '</div>' +
       '<div id="nearby" class="stack">' + nearbyHtml(q) + '</div>' +
       '<button class="link-quiet" data-act="selfFind">Hông thích quán nào, để bố tự tìm</button></section>';
-  }
-
-  /** Dịp có quán chọn sẵn (vd sinh nhật Cá → The Galleon): thẻ quán ở đầu màn Gợi ý nhanh. */
-  function planCard(plan) {
-    if (!plan) return '';
-    var head = '<span class="plan-k">' + esc((plan.emoji || '🎉') + ' Kế hoạch ' + plan.label) + '</span>';
-    if (plan.restaurant) {
-      var x = plan.restaurant;
-      return '<div class="card plan stack">' + head + placeCard(x, 'plan').replace('<article class="card place">', '<article class="place plan-place">') +
-        (x.is_open === false ? '<span class="small muted">Giờ này quán chưa mở' + (x.open_time ? ', mở lúc ' + esc(x.open_time) : '') + '. Món gợi ý bên dưới là món của quán.</span>'
-          : '<span class="small muted">Món gợi ý bên dưới là món của quán này.</span>') + '</div>';
-    }
-    return '<div class="card plan stack">' + head + '<strong class="plan-name">' + esc(plan.restaurant_name) + '</strong>' +
-      '<span class="small">Quán này chưa có trong sổ, thêm vào để ' + esc(bot()) + ' biết đường đi và món của quán nha.</span>' +
-      '<div class="btn-row"><a class="btn btn-outline" href="' + esc(plan.maps_search) + '" target="_blank" rel="noopener">Tìm trên Maps</a>' +
-      '<button class="btn btn-primary" data-act="planAddShop">Thêm vào sổ</button></div></div>';
   }
 
   // ── Quán mới quanh đây (OpenStreetMap) ──
@@ -1140,7 +1115,7 @@
   // ── Form quán ──
   function vShop() {
     var isNew = S.param === 'new' || !S.param;
-    var r = isNew ? Object.assign({}, S.shopPrefill || {}) : S.data.restaurants.filter(function (x) { return x.id === S.param; })[0];
+    var r = isNew ? {} : S.data.restaurants.filter(function (x) { return x.id === S.param; })[0];
     if (!r) return vMissing();
     var days = isNew ? [0, 1, 2, 3, 4, 5, 6] : openDays_(r.open_days);
     var linked = {};
@@ -1562,8 +1537,8 @@
     },
     sortPlaces: function (el) { S.pick.sort = el.dataset.s; render(); },
     pickPlace: function (el) {
-      var quick = el.dataset.src === 'quick' || el.dataset.src === 'plan';
-      var list = el.dataset.src === 'plan' ? [S.quick.result.plan.restaurant] : quick ? S.quick.result.restaurants.open : S.pick.result.open;
+      var quick = el.dataset.src === 'quick';
+      var list = quick ? S.quick.result.restaurants.open : S.pick.result.open;
       var r = list.filter(function (x) { return x.id === el.dataset.id; })[0];
       if (quick) saveSessionBg('di_luon');
       var dish = quick ? S.quick.result.dish : S.pick.dish;
@@ -1571,11 +1546,6 @@
       go('#/memo');
     },
     startQuick: startQuick,
-    planAddShop: function () {
-      var plan = S.quick && S.quick.result && S.quick.result.plan; if (!plan) return;
-      S.shopPrefill = { name: plan.restaurant_name, maps_url: plan.maps_search };
-      go('#/shop/new');
-    },
     quickReject: function () { var q = S.quick; q.rejected.push(q.result.dish.id); runQuick(q); },
     quickAlt: function (el) { runQuick(S.quick, el.dataset.id); window.scrollTo(0, 0); },
     osmAdd: function (el) { addOsmPlace(Number(el.dataset.i), el); },

@@ -43,12 +43,12 @@ Sheet đang chạy bản cũ (chưa có sheet **Categories**, quán còn ô `rat
 6. **Deploy > Manage deployments > Edit > Version: New version > Deploy**.
 7. Cập nhật frontend (GitHub) lên bản mới cùng lúc, vì frontend V2 cần các trường mới trong `bootstrap`.
 
-### Cập nhật bản "Kế hoạch sinh nhật" (quán chọn sẵn cho dịp đặc biệt)
+### Cập nhật bản "Bất ngờ sinh nhật" (quán bí mật cho dịp đặc biệt)
 
 1. Dán `Code.gs` mới vào Apps Script → **Save** → chạy `setupSheets`. Hàm này thêm cột `restaurant` vào **ContextRules** và điền sẵn `The Galleon - Vịnh Tàu Chiến` cho dòng `birthday_ca`.
 2. Trong **ContextRules**, điền cột `date` của dòng `birthday_ca` theo dạng `MM-DD` (ví dụ `07-15`). Chưa điền ngày thì kế hoạch chỉ hiện khi Cá tự bấm chip **Sinh nhật Cá**.
-3. **Deploy > Manage deployments** → bút chì ở deployment app đang dùng → **New version** → **Deploy**. Cài đặt của app sẽ hiện "Apps Script bản 14".
-4. Nên thêm **The Galleon** vào Sổ quán (dán link Google Maps của quán khi thêm) và tick các món quán bán, để app biết đường đi và gợi ý món của quán.
+3. **Deploy > Manage deployments** → bút chì ở deployment app đang dùng → **New version** → **Deploy**. Cài đặt của app sẽ hiện "Apps Script bản 15".
+4. **Bắt buộc**: thêm **The Galleon** vào Sổ quán (dán link Google Maps của quán khi thêm) và tick các món quán bán. Chưa có trong sổ thì app không gợi ý được quán này.
 
 ### Cập nhật bản "Lấy thông tin quán từ link Google Maps"
 
@@ -172,7 +172,9 @@ Ngữ cảnh chỉ **làm nghiêng** cơ hội ra món, không loại món nào:
 **Cách viết luật** (cột `rule`): `thuoc_tinh=so;thuoc_tinh=so`, ví dụ `nuoc=2;nong=2;cay=1`. Số dương làm món có thuộc tính đó dễ ra hơn, số âm làm khó ra hơn. Thuộc tính không có trong sheet Dishes thì bỏ qua.
 - `price_bias`: `1` ưu tiên món/quán xịn hơn (đắt hơn, điểm cao hơn), `-1` ưu tiên tiết kiệm, `0` không ảnh hưởng.
 - `novelty_bias`: `1` ưu tiên món ít hoặc chưa ăn.
-- `restaurant` (chỉ cho `occasion`): tên quán đã chọn sẵn cho dịp đó. Ví dụ dòng **Sinh nhật Cá** có sẵn `The Galleon - Vịnh Tàu Chiến`. Đúng dịp, trang chủ và màn Gợi ý nhanh hiện thẻ **Kế hoạch** với quán này, và món gợi ý chọn trong các món của quán (nếu sổ đã gán món). Tên được so khớp không phân biệt dấu và dấu gạch; quán chưa có trong sổ thì app hiện nút **Tìm trên Maps** và **Thêm vào sổ**.
+- `restaurant` (chỉ cho `occasion`): quán **bí mật** chọn sẵn cho dịp đó. Ví dụ dòng **Sinh nhật Cá** có sẵn `The Galleon - Vịnh Tàu Chiến`.
+  - Khi dịp đang bật (đúng ngày, hoặc Cá tự bấm chip) mà Cá bấm **Gợi ý nhanh**, app "tình cờ" gợi ý món của quán này và xếp quán lên đầu với nhãn "Ngon nhất", y như một gợi ý bình thường. Không có chữ nào nói là đã chọn sẵn.
+  - Quán phải **có trong Sổ quán** (so khớp tên không phân biệt dấu và dấu gạch) và nên được **tick món**. Quán chưa có trong sổ thì app gợi ý như thường, không lộ gì.
 - `message`: câu Leeming nói ở mục "Vì sao Leeming chọn món này?". Chỉ hiện khi món khớp phần lớn luật đó; dịp đặc biệt thì luôn hiện.
 - `emoji`, `label`: hiện trên chip của app. `sort_order`: thứ tự chip.
 
