@@ -18,7 +18,7 @@ const TZ = 'Asia/Ho_Chi_Minh';
 
 /** Số phiên bản backend: tăng mỗi khi Code.gs đổi API hoặc sheet. App so với Code.gs trên GitHub
  *  để báo khi Web app đang deploy vẫn là bản cũ. (Hàm thay vì const để app đọc được sau khi nạp file.) */
-function backendVersion_() { return 12; }
+function backendVersion_() { return 13; }
 
 /** Thuộc tính món ăn (mỗi thuộc tính là 1 cột checkbox trong sheet Dishes), chia theo nhóm để hiển thị.
  *  Muốn thêm thuộc tính mới: chỉ cần thêm cột mới vào sheet Dishes, backend tự nhận và xếp vào nhóm "Khác". */
@@ -165,11 +165,12 @@ const ACTIONS = {
   saveSession: (p) => withLock_(() => saveSession_(p.session || p)),
   saveMeal: (p) => withLock_(() => saveMeal_(p)),
   getMeals: (p) => getMeals_(p),
-  getStats: (p) => getStats_(p)
+  getStats: (p) => getStats_(p),
+  resolveMapLink: (p) => resolveMapLink_(p.url)
 };
 
 /** Action chỉ đọc — được phép gọi bằng GET (tiện để test trên trình duyệt). */
-const READ_ACTIONS = ['ping', 'bootstrap', 'nextQuestion', 'suggestDish', 'suggestRestaurants', 'suggestQuick', 'getMeals', 'getStats'];
+const READ_ACTIONS = ['ping', 'bootstrap', 'nextQuestion', 'suggestDish', 'suggestRestaurants', 'suggestQuick', 'getMeals', 'getStats', 'resolveMapLink'];
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
@@ -1408,6 +1409,157 @@ function learnedWeights_(st, config) {
     });
     out[tag] = w;
   });
+  return out;
+}
+
+// ───────────────────────── LINK GOOGLE MAPS ─────────────────────────
+// Dán link Google Maps khi thêm quán → lấy tên, tọa độ, địa chỉ, loại quán.
+// Trình duyệt không đọc được trang Google Maps (CORS) nên việc mở link do Apps Script làm (UrlFetchApp).
+// Phần đọc URL (parseMapsUrl_) không cần mạng, app dùng lại được cả ở chế độ dùng thử.
+
+const MAPS_HOSTS = /^(maps\.app\.goo\.gl|goo\.gl|g\.co|maps\.google\.[a-z.]+|(www\.)?google\.[a-z.]+)$/i;
+
+function isMapsUrl_(url) {
+  const m = String(url || '').trim().match(/^https?:\/\/([^/?#]+)([^?#]*)/i);
+  if (!m || !MAPS_HOSTS.test(m[1])) return false;
+  // google.com chỉ nhận đường dẫn /maps…; goo.gl chỉ nhận /maps/… (link rút gọn kiểu cũ)
+  if (/^(www\.)?google\./i.test(m[1])) return /^\/maps/.test(m[2]);
+  if (/^goo\.gl$/i.test(m[1])) return /^\/maps\//.test(m[2]);
+  return true;
+}
+
+function decodePart_(s) {
+  try { return decodeURIComponent(String(s).replace(/\+/g, ' ')).trim(); } catch (e) { return String(s).replace(/\+/g, ' ').trim(); }
+}
+function isLatLngText_(s) { return /^\s*-?\d{1,3}(\.\d+)?\s*,\s*-?\d{1,3}(\.\d+)?\s*$/.test(String(s || '')); }
+
+/** Đọc thông tin có sẵn trong URL (không cần mạng): {name, lat, lng, query, short}.
+ *  Ưu tiên tọa độ ghim của quán (!3d…!4d…) hơn tâm bản đồ (@lat,lng). */
+function parseMapsUrl_(url) {
+  const u = String(url || '').trim();
+  const out = { name: null, lat: null, lng: null, coord_src: null, query: null, short: /maps\.app\.goo\.gl|goo\.gl\/maps|g\.co\//i.test(u) };
+  // pin: ghim của quán · query: tọa độ trong ?q= · view: tâm bản đồ đang xem (kém chính xác nhất)
+  const tries = [['pin', /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/],
+    ['query', /[?&](?:q|query|destination|ll|center|daddr)=(-?\d+(?:\.\d+)?)(?:,|%2C)\s*(-?\d+(?:\.\d+)?)/i],
+    ['view', /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/]];
+  for (let i = 0; i < tries.length; i++) {
+    const m = u.match(tries[i][1]);
+    if (!m) continue;
+    const c = fixLatLng_(m[1], m[2]);
+    if (c.lat != null) { out.lat = c.lat; out.lng = c.lng; out.coord_src = tries[i][0]; break; }
+  }
+  const place = u.match(/\/maps\/place\/([^/@?#]+)/i);
+  if (place) {
+    const n = decodePart_(place[1]);
+    if (n && !isLatLngText_(n)) out.name = n;
+  }
+  const q = u.match(/[?&](?:q|query)=([^&#]+)/i);
+  if (q) {
+    const t = decodePart_(q[1]);
+    if (t && !isLatLngText_(t)) { out.query = t; if (!out.name) out.name = t.split(',')[0].trim(); }
+  }
+  return out;
+}
+
+function htmlDecode_(s) {
+  return String(s || '').replace(/&#(\d+);/g, (x, n) => String.fromCharCode(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (x, n) => String.fromCharCode(parseInt(n, 16)))
+    .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+}
+function metaContent_(html, key) {
+  const re1 = new RegExp('<meta[^>]+(?:property|itemprop|name)=["\']' + key + '["\'][^>]*content=["\']([^"\']*)["\']', 'i');
+  const re2 = new RegExp('<meta[^>]+content=["\']([^"\']*)["\'][^>]*(?:property|itemprop|name)=["\']' + key + '["\']', 'i');
+  const m = html.match(re1) || html.match(re2);
+  return m ? htmlDecode_(m[1]).trim() : '';
+}
+
+/** Đọc trang Google Maps của 1 quán: tên + địa chỉ ("Tên · Địa chỉ"), loại quán ("★★★★☆ · Quán phở"),
+ *  tọa độ từ ảnh xem trước (center=lat,lng). Thiếu gì thì bỏ trống. */
+function parseMapsHtml_(html) {
+  const out = { name: null, address: null, type_text: null, lat: null, lng: null };
+  const title = metaContent_(html, 'og:title') || metaContent_(html, 'name');
+  if (title && !/^google maps$/i.test(title)) {
+    const parts = title.split(/\s+·\s+/);
+    out.name = parts[0] || null;
+    if (parts.length > 1) out.address = parts.slice(1).join(', ');
+  }
+  const desc = metaContent_(html, 'og:description') || metaContent_(html, 'description');
+  if (desc) {
+    const segs = desc.split(/\s+·\s+/).map((x) => x.trim())
+      .filter((x) => x && !/^[★☆\d.,\s()]+$/.test(x) && !/^\d+([.,]\d+)?\s*(sao|stars?)/i.test(x));
+    if (segs.length) out.type_text = segs[segs.length - 1];
+  }
+  const img = metaContent_(html, 'og:image');
+  const c = img.match(/center=(-?\d+(?:\.\d+)?)(?:%2C|,)(-?\d+(?:\.\d+)?)/i);
+  if (c) { const f = fixLatLng_(c[1], c[2]); out.lat = f.lat; out.lng = f.lng; }
+  return out;
+}
+
+/** Đoán phân loại quán từ loại quán / tên (vd "Quán phở" → "Bún/Phở"). Chỉ trả tên có trong danh sách. */
+function guessRestaurantCategory_(text, names) {
+  const t = ' ' + String(text || '').toLowerCase() + ' ';
+  const rules = [
+    ['Cà phê mèo', /(cà phê|cafe|café|coffee) mèo|cat caf[eé]/], ['Cà phê', /cà phê|cafe|café|coffee/], ['Trà sữa', /trà sữa|bubble tea|milk tea|tea shop/],
+    ['Pub/Bar', /\bpub\b|\bbar\b|beer club|cocktail/], ['Buffet', /buffet/], ['Lẩu', /lẩu|hot ?pot/], ['Nướng', /nướng|bbq|barbecue|grill/],
+    ['Gà rán', /gà rán|fried chicken|kfc|jollibee|popeyes|lotteria/], ['Ốc', /\bốc\b|snail/], ['Nhậu', /nhậu|bia hơi|beer/],
+    ['Đồ Nhật', /nhật|japanese|sushi|ramen|udon/], ['Đồ Hàn', /hàn quốc|korean|tokbokki|kimbap/], ['Đồ Thái', /thái lan|\bthai\b|đồ thái/],
+    ['Đồ Hoa', /trung hoa|chinese|dimsum|dim sum|há cảo|hoành thánh/], ['Đồ Âu', /pizza|pasta|steak|bít tết|burger|western|ý|italian|french|âu/],
+    ['Bún/Phở', /phở|\bbún\b|pho|noodle soup|hủ tiếu|miến/], ['Cơm', /\bcơm\b|rice/], ['Mì', /\bmì\b|noodle/], ['Cháo', /cháo|congee|porridge/],
+    ['Bánh', /bánh|bakery|banh mi|bánh mì/], ['Cuốn', /cuốn|spring roll/], ['Tráng miệng', /chè|kem|dessert|ice cream|sữa chua/],
+    ['Ăn vặt', /ăn vặt|snack|street food/]
+  ];
+  const lower = {}; (names || []).forEach((n) => { lower[String(n).toLowerCase()] = n; });
+  for (let i = 0; i < rules.length; i++) {
+    if (rules[i][1].test(t) && lower[rules[i][0].toLowerCase()]) return lower[rules[i][0].toLowerCase()];
+  }
+  return null;
+}
+
+/** Mở link Google Maps (đi theo link rút gọn), lấy tên, tọa độ, địa chỉ, loại quán.
+ *  Trả {ok_fetch, name, lat, lng, address, type_text, category, maps_url, note}. */
+function resolveMapLink_(url) {
+  url = String(url || '').trim();
+  if (!isMapsUrl_(url)) throw new Error('Đây không phải link Google Maps. Dán link dạng maps.app.goo.gl/… hoặc google.com/maps/…');
+  let finalUrl = url; let html = ''; let fetched = false; let note = null;
+  if (typeof UrlFetchApp !== 'undefined') {
+    try {
+      const headers = { 'Accept-Language': 'vi,en;q=0.8', 'User-Agent': 'Mozilla/5.0 (compatible; Leeming/1.0)' };
+      let cur = url;
+      for (let i = 0; i < 6; i++) {
+        const res = UrlFetchApp.fetch(cur, { followRedirects: false, muteHttpExceptions: true, headers: headers });
+        const code = res.getResponseCode();
+        const h = res.getHeaders();
+        const loc = h.Location || h.location;
+        if (code >= 300 && code < 400 && loc) {
+          const next = /^https?:/i.test(loc) ? loc : cur.replace(/^(https?:\/\/[^/]+).*$/, '$1') + loc;
+          if (!isMapsUrl_(next)) { note = 'Google chuyển sang trang khác, chỉ đọc được thông tin trong link.'; break; }
+          cur = next; continue;
+        }
+        if (code === 200) { html = res.getContentText(); fetched = true; }
+        break;
+      }
+      finalUrl = cur;
+    } catch (e) {
+      note = 'Không mở được link (' + (e && e.message ? e.message : e) + '), chỉ đọc được thông tin trong link.';
+    }
+  } else {
+    note = 'Chế độ dùng thử không mở được link, chỉ đọc được thông tin trong link.';
+  }
+  const fromUrl = parseMapsUrl_(finalUrl);
+  const fromPage = html ? parseMapsHtml_(html) : {};
+  // Tâm bản đồ (@lat,lng) chỉ dùng khi trang không cho tọa độ ghim của quán.
+  const usePage = fromPage.lat != null && (fromUrl.lat == null || fromUrl.coord_src === 'view');
+  const lat = usePage ? fromPage.lat : fromUrl.lat;
+  const lng = usePage ? fromPage.lng : fromUrl.lng;
+  const name = fromPage.name || fromUrl.name || null;
+  const typeText = fromPage.type_text || null;
+  const names = categoriesOf_('restaurant').map((c) => c.name);
+  const out = {
+    ok_fetch: fetched, name: name, lat: lat, lng: lng, address: fromPage.address || null,
+    type_text: typeText, category: guessRestaurantCategory_([typeText, name].filter(Boolean).join(' '), names),
+    maps_url: parseMapsUrl_(url).short ? url : finalUrl, note: note
+  };
+  if (!out.name && out.lat == null) out.note = (out.note ? out.note + ' ' : '') + 'Không tìm thấy tên hay tọa độ trong link này.';
   return out;
 }
 

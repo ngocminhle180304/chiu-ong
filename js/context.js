@@ -137,6 +137,53 @@
     return placesInflight[key];
   }
 
+  // ── Tra 1 quán cụ thể trên OpenStreetMap (bổ sung khi lấy thông tin từ link Google Maps) ──
+  function normName(s) {
+    return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/[^a-z0-9]+/g, ' ').trim();
+  }
+  /** Quán có tên gần giống `name` trong bán kính ~80 m quanh (lat, lng); không thấy thì quán ăn gần nhất trong ~25 m. */
+  function lookupOsmPlace(lat, lng, name) {
+    if (lat == null || lng == null) return Promise.resolve(null);
+    var q = '[out:json][timeout:10];(nwr["amenity"~"^(restaurant|cafe|fast_food|food_court|bar|pub|ice_cream)$"](around:80,' +
+      Number(lat).toFixed(6) + ',' + Number(lng).toFixed(6) + '););out center 20;';
+    var tryAt = function (i) {
+      if (i >= OVERPASS.length) return Promise.resolve(null);
+      var to = withTimeout(10000);
+      return fetch(OVERPASS[i], { method: 'POST', signal: to.signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }, body: 'data=' + encodeURIComponent(q) })
+        .then(function (r) { to.done(); if (!r.ok) throw new Error('overpass ' + r.status); return r.json(); })
+        .catch(function () { to.done(); return tryAt(i + 1); });
+    };
+    return tryAt(0).then(function (j) {
+      var want = normName(name);
+      var list = ((j && j.elements) || []).map(function (e) {
+        var t = e.tags || {};
+        var plat = e.lat != null ? e.lat : (e.center && e.center.lat); var plng = e.lon != null ? e.lon : (e.center && e.center.lon);
+        var dLat = (plat - lat) * 111000; var dLng = (plng - lng) * 111000 * Math.cos(lat * Math.PI / 180);
+        var n = normName(t.name);
+        return {
+          name: t.name || '', amenity: t.amenity || '', cuisine: t.cuisine || '', opening_hours: t.opening_hours || '',
+          address: [[t['addr:housenumber'], t['addr:street']].filter(Boolean).join(' '), t['addr:district'] || t['addr:subdistrict'], t['addr:city']].filter(Boolean).join(', '),
+          dist: Math.sqrt(dLat * dLat + dLng * dLng),
+          match: !!(want && n && (n === want || n.indexOf(want) >= 0 || want.indexOf(n) >= 0))
+        };
+      }).sort(function (a, b) { return (b.match - a.match) || (a.dist - b.dist); });
+      var best = list[0];
+      return best && (best.match || best.dist <= 25) ? best : null;
+    }).catch(function () { return null; });
+  }
+  /** Tọa độ → địa chỉ (Nominatim của OpenStreetMap). Lỗi thì trả null. */
+  function reverseAddress(lat, lng) {
+    if (lat == null || lng == null) return Promise.resolve(null);
+    var to = withTimeout(8000);
+    return fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&accept-language=vi&lat=' + Number(lat).toFixed(6) + '&lon=' + Number(lng).toFixed(6), { signal: to.signal })
+      .then(function (r) { to.done(); if (!r.ok) throw new Error('nominatim ' + r.status); return r.json(); })
+      .then(function (j) {
+        var a = (j && j.address) || {};
+        var parts = [[a.house_number, a.road].filter(Boolean).join(' '), a.quarter || a.suburb, a.city_district || a.district, a.city || a.town || a.state].filter(Boolean);
+        return parts.length ? parts.join(', ') : ((j && j.display_name) || null);
+      }).catch(function () { to.done(); return null; });
+  }
+
   /** Ngữ cảnh thô gửi kèm khi gợi ý (backend tự suy ra luật). */
   function payload(mode, extra) {
     var p = {
@@ -151,6 +198,7 @@
   global.Ctx = {
     state: state, save: save,
     getLocation: getLocation, locationPermission: locationPermission, lastPosition: function () { return pos; },
-    fetchWeather: fetchWeather, fetchNearbyPlaces: fetchNearbyPlaces, payload: payload
+    fetchWeather: fetchWeather, fetchNearbyPlaces: fetchNearbyPlaces, payload: payload,
+    lookupOsmPlace: lookupOsmPlace, reverseAddress: reverseAddress
   };
 })(window);

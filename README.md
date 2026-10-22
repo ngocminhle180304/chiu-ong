@@ -70,6 +70,7 @@ App sẽ có icon riêng và mở toàn màn hình. Lần đầu bấm **Gợi �
   - Xóa 3 quán có chữ `[Mẫu]`.
   - Thêm quán và món thật, ngay trong app (tab Sổ quán) hoặc nhập thẳng vào Sheet.
   - Mỗi quán nhớ tick các món quán có bán, vì app chỉ gợi ý quán bán đúng món đã chọn.
+- **Thêm quán nhanh bằng link Google Maps**: trên Google Maps, mở quán → **Chia sẻ** → **Sao chép đường liên kết**, rồi dán vào ô *Link Google Maps* khi thêm quán. App tự điền tên, tọa độ, địa chỉ, phân loại (và giờ mở cửa nếu OpenStreetMap có). Ô nào đã có chữ thì giữ nguyên.
 - **Phân loại**: vào **Cài đặt > Phân loại quán & món** để thêm, đổi tên, sắp xếp hoặc xóa. Ô *Phân loại* khi thêm quán/món chỉ cho chọn trong danh sách này. Xóa phân loại đang dùng thì app hỏi chuyển các quán/món đó sang phân loại nào.
 - **Điểm quán**: chấm 4 tiêu chí 0–5 (Chất lượng, Giá, Không gian, Phục vụ). App tự tính *Điểm chung*, không nhập tay. Ô *Giá (đồng)* vẫn là khoảng giá tiền thật.
 - **Đặc điểm món**: chia 4 nhóm (Vị, Dạng món, Nền ẩm thực, Thành phần chính), lấy từ các cột của sheet **Dishes**.
@@ -80,7 +81,7 @@ App sẽ có icon riêng và mở toàn màn hình. Lần đầu bấm **Gợi �
 ## 6. Khi sửa code
 
 - Sửa backend: cập nhật **cả** bản trong Apps Script (rồi *Deploy > Manage deployments > New version*) **lẫn** `backend/Code.gs` trên GitHub. Đổi API hoặc sheet thì tăng số trong `backendVersion_()` của `Code.gs`, để app biết khi Apps Script chưa deploy bản mới.
-- Sửa giao diện: đổi `VERSION` trong `sw.js`, `APP_VERSION` trong `js/app.js` và số `?v=` trong `index.html` (ví dụ `leeming-v13` / `?v=13`) để điện thoại tải bản mới ngay. Phiên bản đang chạy hiện ở cuối màn Cài đặt.
+- Sửa giao diện: đổi `VERSION` trong `sw.js`, `APP_VERSION` trong `js/app.js` và số `?v=` trong `index.html` (ví dụ `leeming-v14` / `?v=14`) để điện thoại tải bản mới ngay. Phiên bản đang chạy hiện ở cuối màn Cài đặt.
 - `js/gas-shim.js` chỉ giả lập các dịch vụ của Google (Sheet, Drive, Utilities…). Logic thật (gợi ý, điểm quán, phân loại, migration) nằm hết trong `backend/Code.gs` và được app nạp nguyên file, nên sửa `Code.gs` là chế độ dùng thử cũng chạy theo.
 
 ## 7. Nâng cấp lên V2 (phân loại cố định, 4 điểm quán, thuộc tính món theo nhóm)
