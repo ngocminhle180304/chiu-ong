@@ -1,8 +1,8 @@
 /* Service worker: lưu sẵn giao diện app để mở nhanh và mở được cả khi mạng yếu.
  * Dữ liệu (Google Apps Script) không đi qua đây — luôn lấy mới từ máy chủ.
  * Khi sửa code, tăng VERSION để điện thoại tải bản mới. */
-var VERSION = 'leeming-v12';
-var NETWORK_ONLY = /(^|\.)(open-meteo\.com|overpass-api\.de|overpass\.kumi\.systems|script\.google\.com|script\.googleusercontent\.com)$/;
+var VERSION = 'leeming-v13';
+var NETWORK_ONLY = /(^|\.)(open-meteo\.com|overpass-api\.de|overpass\.kumi\.systems|nominatim\.openstreetmap\.org|script\.google\.com|script\.googleusercontent\.com)$/;
 var SHELL = [
   './', 'index.html', 'css/app.css', 'js/config.js', 'js/gas-shim.js', 'js/context.js', 'js/app.js', 'backend/Code.gs',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'

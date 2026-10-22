@@ -43,6 +43,15 @@ Sheet đang chạy bản cũ (chưa có sheet **Categories**, quán còn ô `rat
 6. **Deploy > Manage deployments > Edit > Version: New version > Deploy**.
 7. Cập nhật frontend (GitHub) lên bản mới cùng lúc, vì frontend V2 cần các trường mới trong `bootstrap`.
 
+### Cập nhật bản "Lấy thông tin quán từ link Google Maps"
+
+Bản này dùng `UrlFetchApp` để mở link Google Maps, nên Apps Script cần thêm quyền **"Kết nối với một dịch vụ bên ngoài"**.
+
+1. Dán toàn bộ `Code.gs` mới vào Apps Script, bấm **Save**.
+2. Chọn hàm `testApi` (hoặc `setupSheets`) và bấm **Run**. Google sẽ hỏi cấp quyền mới: chọn tài khoản → **Advanced** → **Go to … (unsafe)** → **Allow**. Nếu bỏ qua bước này, Web app sẽ lỗi khi lấy thông tin từ link.
+3. **Deploy > Manage deployments** → bút chì ở deployment app đang dùng → **Version: New version** → **Deploy**.
+4. Kiểm tra trên app: cuối màn **Cài đặt** hiện "Apps Script bản 13".
+
 ### Cập nhật bản "Đánh giá theo bữa" (4 điểm quán mỗi bữa + món đã thử)
 
 1. Dán toàn bộ `Code.gs` mới vào Apps Script, bấm **Save**. Bản trong Apps Script phải **giống hệt** `backend/Code.gs` trên GitHub.
@@ -206,6 +215,7 @@ Các action chỉ đọc (đánh dấu ✓ ở cột GET) gọi được bằng 
 | `suggestRestaurants` | ✓ | `{dish_id, lat?, lng?, context?}` | `{dish, open:[…is_best, is_nearest, distance_km, maps_link, out_of_radius?, match_score?], closed, location_source, radius_km}` |
 | `suggestQuick` | ✓ | `{context, rejected?, lat?, lng?, radius_km?, now?, dish_id?}` | `{dish, restaurants:{open, closed, location_source}, reasons, context:{keys, labels, time_bucket…}, alternatives (≤ 2 món), exhausted}` |
 | `getMeals` | ✓ | `{from?, to?, limit?}` | Danh sách bữa ăn, mới nhất trước, mỗi bữa kèm `dishes` (món đã thử) |
+| `resolveMapLink` | ✓ | `{url}` | Mở link Google Maps (đi được link rút gọn `maps.app.goo.gl`): `{name, lat, lng, address, type_text, category, maps_url, ok_fetch, note}` |
 | `getStats` | ✓ | `{month?:'2026-10', tasteDays?:14}` | `totalMeals`, `newPlaces`, `avgRejects`, `topDishes`, `tasteProfile`, `feltTastes`, `byWeekday`, `photos`, `availableMonths`, `contextInsights` |
 | `create` | | `{table, data}` | Bản ghi mới |
 | `update` | | `{table, id, data}` | Bản ghi sau khi sửa (categories: kèm `renamed`) |
@@ -243,6 +253,10 @@ Các action chỉ đọc (đánh dấu ✓ ở cột GET) gọi được bằng 
 ## 5. Lưu ý
 
 - **Ảnh**: nên nén ở điện thoại xuống khoảng 1280px trước khi gửi (frontend sẽ làm việc này). Ảnh lưu trong folder Drive `Chìu ông hông bíc ăn gì - Ảnh kỷ niệm` và đặt chế độ *ai có link mới xem được*, để app hiển thị được ảnh.
+- **Link Google Maps** (`resolveMapLink`):
+  - Chỉ nhận link của Google Maps, và chỉ đi theo chuyển hướng sang trang Google Maps.
+  - Thông tin lấy theo thứ tự: tọa độ ghim của quán trong link (`!3d…!4d…`) → tên trong đường dẫn `/maps/place/…` → các thẻ `og:title` ("Tên · Địa chỉ"), `og:description` ("★★★★☆ · Quán phở") và `og:image` (tọa độ) trên trang.
+  - Google có thể đổi cách hiển thị trang bất cứ lúc nào. Khi đó tên và tọa độ trong link vẫn đọc được, phần còn lại app lấy từ OpenStreetMap.
 - **Dịch vụ ngoài**: thời tiết (Open-Meteo) và quán quanh đây (OpenStreetMap/Overpass) do **trình duyệt** gọi trực tiếp, không cần key, tọa độ làm tròn 2 chữ số (~1 km). Lỗi mạng thì app bỏ qua phần đó, không báo lỗi.
 - **Mã truy cập**: nếu lỡ lộ, chọn **Leeming > Tạo lại mã truy cập** rồi cập nhật mã mới vào frontend.
 - **Tốc độ**: mỗi lần gọi mất khoảng 1–2 giây. Frontend nên gọi `bootstrap` một lần lúc mở app, rồi chạy logic gợi ý ngay trên máy cho mượt. Các hàm trong phần "LOGIC GỢI Ý" của `Code.gs` không đụng tới Sheet, nên có thể chép nguyên sang frontend.

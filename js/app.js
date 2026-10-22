@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = 'leeming-v12'; // đổi cùng VERSION trong sw.js
+  var APP_VERSION = 'leeming-v13'; // đổi cùng VERSION trong sw.js
   var CFG = window.APP_CONFIG || {};
   var DEMO = !CFG.API_URL;
   var WRITE_ACTIONS = { create: 1, update: 1, remove: 1, linkDishes: 1, saveSession: 1, saveMeal: 1 };
@@ -1127,7 +1127,9 @@
       '<div class="field"><label for="s-name">Tên quán *</label><input class="input" id="s-name" name="name" required value="' + v('name') + '"></div>' +
       categoryField('restaurant', r.category, 's-cat') +
       '<div class="field"><label for="s-addr">Địa chỉ</label><input class="input" id="s-addr" name="address" value="' + v('address') + '"></div>' +
-      '<div class="field"><label for="s-map">Link Google Maps hoặc tọa độ</label><input class="input" id="s-map" name="maps_url" data-change="mapLink" value="' + v('maps_url') + '" placeholder="Dán link, hoặc 21.0285, 105.8542">' +
+      '<div class="field"><label for="s-map">Link Google Maps hoặc tọa độ</label><input class="input" id="s-map" name="maps_url" data-change="mapLink" value="' + v('maps_url') + '" placeholder="Dán link quán trên Google Maps, hoặc 21.0285, 105.8542">' +
+      '<button type="button" class="btn btn-outline" data-act="mapFetch">' + I.search + 'Lấy thông tin từ link</button>' +
+      '<div id="map-info" class="small muted" hidden></div>' +
       '<div class="grid-2"><input class="input" name="lat" inputmode="decimal" aria-label="Vĩ độ" placeholder="Vĩ độ" value="' + v('lat') + '">' +
       '<input class="input" name="lng" inputmode="decimal" aria-label="Kinh độ" placeholder="Kinh độ" value="' + v('lng') + '"></div>' +
       '<button type="button" class="btn btn-outline" data-act="useHere">' + I.pin + 'Lấy vị trí hiện tại</button></div>' +
@@ -1155,6 +1157,71 @@
       '<button class="btn btn-primary btn-block" type="submit">' + (isNew ? 'Thêm quán' : 'Lưu thay đổi') + '</button>' +
       (isNew ? '' : '<button type="button" class="btn btn-danger btn-block" data-act="delShop">Xóa quán khỏi sổ</button>') +
       '</form></section>';
+  }
+  // ── Lấy thông tin quán từ link Google Maps ──
+  /** OSM "opening_hours" đơn giản ("Mo-Su 06:00-22:00", "07:00-21:30") → {open, close, days:[0..6]|null}. */
+  function parseOsmHours(oh) {
+    var m = String(oh || '').match(/^(?:((?:Mo|Tu|We|Th|Fr|Sa|Su)(?:-(?:Mo|Tu|We|Th|Fr|Sa|Su))?)\s+)?(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/);
+    if (!m) return null;
+    var pad = function (t) { return t.length === 4 ? '0' + t : t; };
+    var days = null;
+    if (m[1]) {
+      var idx = { Su: 0, Mo: 1, Tu: 2, We: 3, Th: 4, Fr: 5, Sa: 6 }; var ab = m[1].split('-');
+      var a = idx[ab[0]]; var b = ab.length > 1 ? idx[ab[1]] : a; days = [];
+      for (var d = a; ; d = (d + 1) % 7) { days.push(d); if (d === b) break; }
+    }
+    return { open: pad(m[2]), close: pad(m[3] === '24:00' ? '00:00' : m[3]), days: days };
+  }
+  /** Dán link Google Maps vào form quán → điền tên, tọa độ, địa chỉ, phân loại, giờ mở cửa.
+   *  Apps Script mở link (đi được link rút gọn); OpenStreetMap bổ sung chỗ còn thiếu. Ô đã có chữ thì giữ nguyên. */
+  function fetchPlaceInfo(form) {
+    var url = String(form.maps_url.value || '').trim();
+    var btn = form.querySelector('[data-act="mapFetch"]'); var info = $('#map-info');
+    if (form._fetching === url) return;
+    form._fetching = url;
+    if (btn) { btn.disabled = true; btn.lastChild.textContent = 'Đang lấy thông tin…'; }
+    var done = function () { form._fetching = null; if (btn) { btn.disabled = false; btn.lastChild.textContent = 'Lấy thông tin từ link'; } };
+    var names = catList('restaurant').map(function (c) { return c.name; });
+    if (!names.length) names = categories(S.data.restaurants, 'restaurant');
+    api('resolveMapLink', { url: url }).catch(function (e) {
+      // Apps Script chưa có action này: vẫn đọc được thông tin nằm sẵn trong link.
+      var p = parseMapsUrl_(url);
+      return { name: p.name, lat: p.lat, lng: p.lng, maps_url: url, note: friendlyError(e.message) };
+    }).then(function (r) {
+      var lat = hasScore(r.lat) ? Number(r.lat) : (hasScore(form.lat.value) ? Number(form.lat.value) : null);
+      var lng = hasScore(r.lng) ? Number(r.lng) : (hasScore(form.lng.value) ? Number(form.lng.value) : null);
+      return Ctx.lookupOsmPlace(lat, lng, r.name || form.name.value).then(function (osm) {
+        var needAddr = !r.address && !String(form.address.value || '').trim() && !(osm && osm.address);
+        return (needAddr ? Ctx.reverseAddress(lat, lng) : Promise.resolve(null)).then(function (addr) {
+          return { r: r, osm: osm, addr: addr, lat: lat, lng: lng };
+        });
+      });
+    }).then(function (x) {
+      var r = x.r; var osm = x.osm || {}; var got = [];
+      var setIfEmpty = function (el, val, label) {
+        if (!el || !val || String(el.value || '').trim()) return;
+        el.value = val; got.push(label);
+      };
+      setIfEmpty(form.name, r.name || osm.name, 'tên');
+      if (x.lat != null && x.lng != null && (String(form.lat.value) !== String(x.lat) || String(form.lng.value) !== String(x.lng))) {
+        form.lat.value = x.lat; form.lng.value = x.lng; got.push('tọa độ');
+      }
+      setIfEmpty(form.address, r.address || osm.address || x.addr, 'địa chỉ');
+      var cat = r.category || guessRestaurantCategory_([r.type_text, osm.cuisine && osm.cuisine.replace(/[;_]/g, ' '), osm.amenity === 'cafe' ? 'cafe' : '', r.name || osm.name].filter(Boolean).join(' '), names);
+      var sel = form.querySelector('[name="category"]');
+      if (cat && sel && !sel.value && Array.prototype.some.call(sel.options, function (o) { return o.value === cat; })) { sel.value = cat; got.push('phân loại'); }
+      var h = parseOsmHours(osm.opening_hours);
+      if (h && !form.open_time.value && !form.close_time.value) {
+        form.open_time.value = h.open; form.close_time.value = h.close; got.push('giờ mở cửa');
+        if (h.days) form.querySelectorAll('input[name="day"]').forEach(function (cb) { cb.checked = h.days.indexOf(Number(cb.value)) >= 0; });
+      }
+      if (r.maps_url && r.maps_url !== form.maps_url.value) form.maps_url.value = r.maps_url;
+      var bits = [r.type_text ? 'Loại trên Google: ' + r.type_text : '', osm.name ? 'OpenStreetMap: ' + osm.name : '', r.note || ''].filter(Boolean);
+      if (info) { info.hidden = !bits.length; info.textContent = bits.join(' · '); }
+      if (got.length) toast('Đã điền ' + got.join(', ') + ' từ link');
+      else toast(r.note || 'Không lấy thêm được gì từ link này, Cá điền tay giúp ' + bot() + ' nha', !r.name && x.lat == null);
+      done();
+    }).catch(function (e) { done(); toast(e.message, true); });
   }
   function parseCoords(s) {
     s = String(s || '');
@@ -1525,6 +1592,16 @@
     openDish: function (el) { go('#/dish/' + encodeURIComponent(el.dataset.id)); },
     newShop: function () { go('#/shop/new'); },
     newDish: function () { go('#/dish/new'); },
+    mapFetch: function (el) {
+      var f = el.form; var url = String(f.maps_url.value || '').trim();
+      if (!url) { toast('Dán link quán trên Google Maps vào ô trên trước nha', true); f.maps_url.focus(); return; }
+      if (typeof isMapsUrl_ === 'function' && !isMapsUrl_(url)) {
+        var c = parseCoords(url);
+        if (c) { f.lat.value = c.lat; f.lng.value = c.lng; toast('Đã đọc tọa độ'); } else toast('Đây không phải link Google Maps', true);
+        return;
+      }
+      fetchPlaceInfo(f);
+    },
     useHere: function (el) {
       el.disabled = true;
       getPos(true).then(function (pos) {
@@ -1632,9 +1709,10 @@
     dishSel: function (el) { var box = $('#dish-other'); if (box) box.hidden = el.value !== '__other'; },
     statMonth: function (el) { S.stats.month = el.value; S.stats.data = null; loadStats(); render(); },
     mapLink: function (el) {
+      // Dán link Google Maps → tự lấy tên, tọa độ, địa chỉ, phân loại. Dán tọa độ → điền tọa độ.
+      if (typeof isMapsUrl_ === 'function' && isMapsUrl_(el.value)) { fetchPlaceInfo(el.form); return; }
       var c = parseCoords(el.value);
-      if (c) { el.form.lat.value = c.lat; el.form.lng.value = c.lng; toast('Đã đọc tọa độ từ link'); }
-      else if (/goo\.gl|maps\.app/.test(el.value)) toast('Link rút gọn không có tọa độ. Cá nhấn giữ vào quán trên Google Maps để copy tọa độ nha', true);
+      if (c) { el.form.lat.value = c.lat; el.form.lng.value = c.lng; toast('Đã đọc tọa độ'); }
     }
   };
   var FORMS = {
